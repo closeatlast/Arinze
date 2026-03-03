@@ -11,6 +11,7 @@ app.config["JWT_SECRET_KEY"] = "super-secret-key"
 bcrypt = Bcrypt(app)
 jwt = JWTManager(app)
 
+# Demo users
 users = [
     {
         "email": "admin@test.com",
@@ -18,9 +19,14 @@ users = [
         "role": "admin"
     },
     {
-        "email": "user@test.com",
+        "email": "patient@test.com",
         "password": bcrypt.generate_password_hash("1234").decode("utf-8"),
-        "role": "user"
+        "role": "patient"
+    },
+    {
+        "email": "clinician@test.com",
+        "password": bcrypt.generate_password_hash("1234").decode("utf-8"),
+        "role": "clinician"
     }
 ]
 
@@ -40,12 +46,6 @@ def login():
     return jsonify(token=token, role=user["role"])
 
 
-@app.route("/dashboard")
-@jwt_required()
-def dashboard():
-    return {"msg": "User dashboard"}
-
-
 @app.route("/admin")
 @jwt_required()
 def admin():
@@ -55,5 +55,24 @@ def admin():
     return {"msg": "Admin dashboard"}
 
 
+@app.route("/patient")
+@jwt_required()
+def patient():
+    user = get_jwt_identity()
+    if user["role"] != "patient":
+        return {"msg": "Forbidden"}, 403
+    return {"msg": "Patient dashboard"}
+
+
+@app.route("/clinician")
+@jwt_required()
+def clinician():
+    user = get_jwt_identity()
+    if user["role"] != "clinician":
+        return {"msg": "Forbidden"}, 403
+    return {"msg": "Clinician dashboard"}
+
+
 if __name__ == "__main__":
     app.run(debug=True)
+
