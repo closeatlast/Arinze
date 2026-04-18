@@ -10,7 +10,6 @@ __pycache__/
 dist/
 build/
 *.sqlite3
-backend/instance/
 
 # Node / React
 frontend/node_modules/
