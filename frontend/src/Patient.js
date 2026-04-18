@@ -252,16 +252,16 @@ export default function Patient() {
             Balance Due: <strong>{fmt(remainingBalance)}</strong>
           </div>
           <button style={styles.downloadBtn} onClick={downloadBill}>
-            ⬇ Download Bill
+            Download Bill
           </button>
         </div>
       </div>
 
       <div style={styles.outerTabBar}>
         {[
-          { key: "billing",      label: "💳 Billing" },
-          { key: "appointments", label: `📅 Appointments${appointments.length ? ` (${appointments.length})` : ""}` },
-          { key: "messages",     label: `✉️ Messages${unreadCount > 0 ? ` (${unreadCount} new)` : messages.length ? ` (${messages.length})` : ""}` },
+          { key: "billing",      label: "Billing" },
+          { key: "appointments", label: `Appointments${appointments.length ? ` (${appointments.length})` : ""}` },
+          { key: "messages",     label: `Messages${unreadCount > 0 ? ` (${unreadCount} new)` : messages.length ? ` (${messages.length})` : ""}` },
         ].map(({ key, label }) => (
           <button
             key={key}
@@ -435,7 +435,7 @@ export default function Patient() {
                       <ApptPill status={a.status} />
                     </div>
                     <div style={{ fontSize: 13, color: "#6b7280", marginTop: 4 }}>
-                      🕐 {a.appt_time} &nbsp;·&nbsp; 👨‍⚕️ {a.clinician}
+                      {a.appt_time} &nbsp;·&nbsp; {a.clinician}
                     </div>
                     {a.notes && (
                       <p style={{ margin: "4px 0 0", fontSize: 13, color: "#4b5563" }}>{a.notes}</p>

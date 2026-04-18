@@ -10,10 +10,11 @@ from flask_jwt_extended import (
 from flask_cors import CORS
 from sqlalchemy import func
 from datetime import datetime, timedelta
+from collections import defaultdict
 import os
 import uuid
 
-from models import db, Patient, Admission, Charge, Procedure, Medication, Appointment, Message, ClinicalNote, Vitals
+from models import db, Patient, Admission, Charge, Procedure, Medication, Appointment, Message, ClinicalNote, Vitals, User
 
 print("RUNNING FILE:", os.path.abspath(__file__))
 
@@ -23,23 +24,11 @@ CORS(app)
 app.config["JWT_SECRET_KEY"]               = "super-secret-key"
 app.config["SQLALCHEMY_DATABASE_URI"]      = "sqlite:///hospital.db"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+app.config["JWT_ACCESS_TOKEN_EXPIRES"]     = timedelta(hours=8)
 
 bcrypt = Bcrypt(app)
 jwt    = JWTManager(app)
 db.init_app(app)
-
-users = [
-    {"email": "admin@test.com",     "password": None, "role": "admin",     "patient_id": None},
-    {"email": "patient@test.com",   "password": None, "role": "patient",   "patient_id": 1},
-    {"email": "clinician@test.com", "password": None, "role": "clinician", "patient_id": None},
-]
-
-def _hash(pw):
-    return bcrypt.generate_password_hash(pw).decode("utf-8")
-
-users[0]["password"] = _hash("1234")
-users[1]["password"] = _hash("1234")
-users[2]["password"] = _hash("1234")
 
 def is_admin():
     return get_jwt().get("role") == "admin"
@@ -51,15 +40,15 @@ MONTH_NAMES = {
 }
 
 WARD_CAPACITY = {
-    "General Ward A":    40,
-    "General Ward B":    40,
-    "Surgical Ward A":   30,
-    "Surgical Ward B":   30,
-    "Cardiology Ward A": 25,
-    "Orthopedic Ward C": 25,
-    "Neurology Ward":    20,
-    "Pediatric Ward":    20,
-    "ICU":               16,
+    "General Ward A":    50,
+    "General Ward B":    50,
+    "Surgical Ward A":   55,
+    "Surgical Ward B":   50,
+    "Cardiology Ward A": 45,
+    "Orthopedic Ward C": 60,
+    "Neurology Ward":    45,
+    "Pediatric Ward":    55,
+    "ICU":               45,
 }
 
 def month_label(ym_str):
@@ -77,11 +66,9 @@ def week_label(date_str):
     except Exception:
         return date_str
 
-
 @app.get("/")
 def health():
     return jsonify({"msg": "API running"}), 200
-
 
 @app.post("/login")
 def login():
@@ -89,16 +76,19 @@ def login():
     email    = (data.get("email") or "").strip()
     password = (data.get("password") or "").strip()
 
-    user = next((u for u in users if u["email"] == email), None)
-    if not user or not bcrypt.check_password_hash(user["password"], password):
+    user = User.query.filter_by(email=email.lower()).first()
+    if not user or not bcrypt.check_password_hash(user.password_hash, password):
         return jsonify({"msg": "Bad credentials"}), 401
 
     token = create_access_token(
-        identity=user["email"],
-        additional_claims={"role": user["role"]},
+        identity=user.email,
+        additional_claims={
+            "role":       user.role,
+            "name":       user.name       or "",
+            "department": user.department or "",
+        },
     )
-    return jsonify({"token": token, "role": user["role"]}), 200
-
+    return jsonify({"token": token, "role": user.role}), 200
 
 @app.get("/patients")
 @jwt_required()
@@ -128,21 +118,105 @@ def get_patients():
         result.append(p_dict)
     return jsonify(result), 200
 
+@app.get("/clinician/patients")
+@jwt_required()
+def clinician_patients():
+    if get_jwt().get("role") != "clinician":
+        return jsonify({"msg": "Forbidden"}), 403
+
+    physician_name = get_jwt().get("name", "")
+    if not physician_name:
+        return jsonify([]), 200
+
+    admission_rows = (
+        Admission.query
+        .filter_by(attending_physician=physician_name)
+        .order_by(Admission.id.desc())
+        .all()
+    )
+    seen_pids = []
+    for a in admission_rows:
+        if a.patient_id not in seen_pids:
+            seen_pids.append(a.patient_id)
+
+    result = []
+    for pid in seen_pids:
+        patient = db.session.get(Patient, pid)
+        if not patient:
+            continue
+        p_dict = patient.to_dict()
+        latest = (
+            Admission.query
+            .filter_by(patient_id=pid, attending_physician=physician_name)
+            .order_by(Admission.id.desc())
+            .first()
+        )
+        if latest:
+            p_dict["status"]       = latest.status
+            p_dict["ward"]         = latest.ward
+            p_dict["bed"]          = latest.bed
+            p_dict["admit_date"]   = latest.admit_date
+            p_dict["admission_id"] = latest.id
+        else:
+            p_dict["status"]       = "No Record"
+            p_dict["ward"]         = "—"
+            p_dict["bed"]          = "—"
+            p_dict["admit_date"]   = "—"
+            p_dict["admission_id"] = None
+        result.append(p_dict)
+
+    result.sort(key=lambda p: p["last_name"])
+    return jsonify(result), 200
+
+@app.get("/admin/clinicians")
+@jwt_required()
+def admin_clinicians():
+    if not is_admin():
+        return jsonify({"msg": "Forbidden"}), 403
+
+    rows = (
+        db.session.query(
+            Admission.attending_physician,
+            func.count(Admission.patient_id.distinct()).label("active_patients"),
+        )
+        .filter(Admission.status.in_(["Admitted", "Under Observation"]))
+        .group_by(Admission.attending_physician)
+        .order_by(func.count(Admission.patient_id.distinct()).desc())
+        .all()
+    )
+
+    clinicians = [
+        {"name": r.attending_physician, "active_patients": r.active_patients}
+        for r in rows
+    ]
+    return jsonify({"clinicians": clinicians, "total": len(clinicians)}), 200
 
 @app.get("/patients/<int:patient_id>")
 @jwt_required()
 def get_patient(patient_id):
     patient = Patient.query.get_or_404(patient_id)
     p_dict  = patient.to_dict()
-    latest  = (
-        Admission.query
-        .filter_by(patient_id=patient.id)
-        .order_by(Admission.id.desc())
-        .first()
-    )
+
+    claims = get_jwt()
+    physician_name = claims.get("name", "") if claims.get("role") == "clinician" else ""
+
+    if physician_name:
+        latest = (
+            Admission.query
+            .filter_by(patient_id=patient.id, attending_physician=physician_name)
+            .order_by(Admission.id.desc())
+            .first()
+        )
+    else:
+        latest = (
+            Admission.query
+            .filter_by(patient_id=patient.id)
+            .order_by(Admission.id.desc())
+            .first()
+        )
+
     p_dict["admission"] = latest.to_dict() if latest else None
     return jsonify(p_dict), 200
-
 
 @app.get("/patients/<int:patient_id>/admissions")
 @jwt_required()
@@ -155,23 +229,21 @@ def get_patient_admissions(patient_id):
     )
     return jsonify([a.to_dict() for a in admissions]), 200
 
-
 @app.get("/admissions/<int:admission_id>")
 @jwt_required()
 def get_admission(admission_id):
     admission = Admission.query.get_or_404(admission_id)
     return jsonify(admission.to_dict()), 200
 
-
 @app.get("/patient/me")
 @jwt_required()
 def patient_me():
     email = get_jwt_identity()
-    user  = next((u for u in users if u["email"] == email), None)
-    if not user or user["role"] != "patient":
+    user  = User.query.filter_by(email=email).first()
+    if not user or user.role != "patient":
         return jsonify({"msg": "Forbidden"}), 403
 
-    patient_id = user.get("patient_id")
+    patient_id = user.patient_id
     if not patient_id:
         return jsonify({"msg": "No patient record linked to this account"}), 404
 
@@ -189,7 +261,6 @@ def patient_me():
     p_dict["admission"] = latest.to_dict() if latest else None
     return jsonify(p_dict), 200
 
-
 @app.get("/appointments/patient/<int:patient_id>")
 @jwt_required()
 def get_patient_appointments(patient_id):
@@ -201,15 +272,14 @@ def get_patient_appointments(patient_id):
     )
     return jsonify([a.to_dict() for a in appts]), 200
 
-
 @app.get("/appointments/me")
 @jwt_required()
 def get_my_appointments():
     email = get_jwt_identity()
-    user  = next((u for u in users if u["email"] == email), None)
-    if not user or user["role"] != "patient":
+    user  = User.query.filter_by(email=email).first()
+    if not user or user.role != "patient":
         return jsonify({"msg": "Forbidden"}), 403
-    patient_id = user.get("patient_id")
+    patient_id = user.patient_id
     appts = (
         Appointment.query
         .filter_by(patient_id=patient_id)
@@ -217,7 +287,6 @@ def get_my_appointments():
         .all()
     )
     return jsonify([a.to_dict() for a in appts]), 200
-
 
 @app.post("/appointments")
 @jwt_required()
@@ -239,7 +308,6 @@ def create_appointment():
     db.session.commit()
     return jsonify(appt.to_dict()), 201
 
-
 @app.patch("/appointments/<int:appt_id>")
 @jwt_required()
 def update_appointment(appt_id):
@@ -257,7 +325,6 @@ def update_appointment(appt_id):
     db.session.commit()
     return jsonify(appt.to_dict()), 200
 
-
 @app.get("/messages/patient/<int:patient_id>")
 @jwt_required()
 def get_messages_for_patient(patient_id):
@@ -269,15 +336,14 @@ def get_messages_for_patient(patient_id):
     )
     return jsonify([m.to_dict() for m in msgs]), 200
 
-
 @app.get("/messages/me")
 @jwt_required()
 def get_my_messages():
     email = get_jwt_identity()
-    user  = next((u for u in users if u["email"] == email), None)
-    if not user or user["role"] != "patient":
+    user  = User.query.filter_by(email=email).first()
+    if not user or user.role != "patient":
         return jsonify({"msg": "Forbidden"}), 403
-    patient_id = user.get("patient_id")
+    patient_id = user.patient_id
     msgs = (
         Message.query
         .filter_by(patient_id=patient_id)
@@ -285,7 +351,6 @@ def get_my_messages():
         .all()
     )
     return jsonify([m.to_dict() for m in msgs]), 200
-
 
 @app.post("/messages")
 @jwt_required()
@@ -307,7 +372,6 @@ def send_message():
     db.session.commit()
     return jsonify(msg.to_dict()), 201
 
-
 @app.patch("/messages/<int:msg_id>/read")
 @jwt_required()
 def mark_message_read(msg_id):
@@ -317,7 +381,6 @@ def mark_message_read(msg_id):
     msg.is_read = True
     db.session.commit()
     return jsonify(msg.to_dict()), 200
-
 
 @app.post("/admissions/<int:adm_id>/notes")
 @jwt_required()
@@ -339,7 +402,6 @@ def add_clinical_note(adm_id):
     db.session.commit()
     return jsonify(note.to_dict()), 201
 
-
 @app.patch("/admissions/<int:adm_id>/vitals")
 @jwt_required()
 def update_vitals(adm_id):
@@ -360,7 +422,6 @@ def update_vitals(adm_id):
     db.session.commit()
     return jsonify(v.to_dict()), 200
 
-
 @app.patch("/admissions/<int:adm_id>/discharge")
 @jwt_required()
 def discharge_patient(adm_id):
@@ -379,31 +440,39 @@ def discharge_patient(adm_id):
     db.session.commit()
     return jsonify(adm.to_dict()), 200
 
-
 @app.get("/notifications")
 @jwt_required()
 def get_notifications():
     email = get_jwt_identity()
     role  = get_jwt().get("role")
-    user  = next((u for u in users if u["email"] == email), None)
+    user  = User.query.filter_by(email=email).first()
 
     if role == "patient":
-        patient_id      = user.get("patient_id") if user else None
+        patient_id      = user.patient_id if user else None
         unread_msgs     = Message.query.filter_by(patient_id=patient_id, is_read=False).count() if patient_id else 0
         upcoming_appts  = Appointment.query.filter_by(patient_id=patient_id, status="Scheduled").count() if patient_id else 0
         return jsonify({"unread_messages": unread_msgs, "upcoming_appointments": upcoming_appts, "total": unread_msgs + upcoming_appts}), 200
 
     if role == "clinician":
-        today        = datetime(2026, 3, 10).strftime("%Y-%m-%d")
-        todays_appts = Appointment.query.filter_by(appt_date=today, status="Scheduled").count()
-        return jsonify({"todays_appointments": todays_appts, "total": todays_appts}), 200
+        name = get_jwt().get("name", "")
+        unread_msgs = (
+            db.session.query(func.count(Message.id))
+            .join(Admission, Admission.patient_id == Message.patient_id)
+            .filter(
+                Admission.attending_physician == name,
+                Message.is_read == False,
+            )
+            .scalar() or 0
+        )
+        return jsonify({"unread_messages": unread_msgs, "total": unread_msgs}), 200
 
     if role == "admin":
-        admitted = Admission.query.filter(Admission.status.in_(["Admitted", "Under Observation"])).count()
+        admitted = db.session.query(
+            func.count(Admission.patient_id.distinct())
+        ).filter(Admission.status.in_(["Admitted", "Under Observation"])).scalar() or 0
         return jsonify({"admitted_patients": admitted, "total": admitted}), 200
 
     return jsonify({"total": 0}), 200
-
 
 @app.get("/admin/overview")
 @jwt_required()
@@ -411,35 +480,45 @@ def admin_overview():
     if not is_admin():
         return jsonify({"msg": "Forbidden"}), 403
 
-    today     = datetime(2026, 3, 10)
+    today     = datetime.now()
     week_ago  = (today - timedelta(days=7)).strftime("%Y-%m-%d")
     today_str = today.strftime("%Y-%m-%d")
     cur_month = today.strftime("%Y-%m")
 
     total_patients    = Patient.query.count()
     total_admissions  = Admission.query.count()
-    currently_admitted = Admission.query.filter(
+    currently_admitted = db.session.query(
+        func.count(Admission.patient_id.distinct())
+    ).filter(
         Admission.status.in_(["Admitted", "Under Observation"])
-    ).count()
+    ).scalar() or 0
 
-    admissions_7d = Admission.query.filter(
+    admissions_7d = db.session.query(
+        func.count(Admission.patient_id.distinct())
+    ).filter(
         Admission.admit_date >= week_ago,
         Admission.admit_date <= today_str
-    ).count()
+    ).scalar() or 0
 
-    discharges_7d = Admission.query.filter(
+    discharges_7d = db.session.query(
+        func.count(Admission.patient_id.distinct())
+    ).filter(
         Admission.discharge_date >= week_ago,
         Admission.discharge_date <= today_str
-    ).count()
+    ).scalar() or 0
 
     discharged = Admission.query.filter(Admission.discharge_date.isnot(None)).all()
     if discharged:
-        los_days = [
-            (datetime.strptime(a.discharge_date, "%Y-%m-%d") -
-             datetime.strptime(a.admit_date,     "%Y-%m-%d")).days
-            for a in discharged
-        ]
-        avg_los = round(sum(los_days) / len(los_days), 1)
+        los_days = []
+        for a in discharged:
+            try:
+                los = (datetime.strptime(a.discharge_date, "%Y-%m-%d") -
+                       datetime.strptime(a.admit_date,     "%Y-%m-%d")).days
+                if los >= 1:
+                    los_days.append(los)
+            except (ValueError, TypeError):
+                pass
+        avg_los = round(sum(los_days) / len(los_days), 1) if los_days else 0
     else:
         avg_los = 0
 
@@ -448,7 +527,10 @@ def admin_overview():
     cost_mtd = (
         db.session.query(func.sum(Charge.amount))
         .join(Admission, Admission.id == Charge.admission_id)
-        .filter(func.strftime("%Y-%m", Admission.admit_date) == cur_month)
+        .filter(
+            Admission.status == "Discharged",
+            func.strftime("%Y-%m", Admission.admit_date) == cur_month,
+        )
         .scalar() or 0
     )
 
@@ -456,14 +538,20 @@ def admin_overview():
     cost_last_month = (
         db.session.query(func.sum(Charge.amount))
         .join(Admission, Admission.id == Charge.admission_id)
-        .filter(func.strftime("%Y-%m", Admission.admit_date) == cost_last_month_str)
+        .filter(
+            Admission.status == "Discharged",
+            func.strftime("%Y-%m", Admission.admit_date) == cost_last_month_str,
+        )
         .scalar() or 0
     )
 
     cost_ytd = (
         db.session.query(func.sum(Charge.amount))
         .join(Admission, Admission.id == Charge.admission_id)
-        .filter(func.strftime("%Y", Admission.admit_date) == str(today.year))
+        .filter(
+            Admission.status == "Discharged",
+            func.strftime("%Y", Admission.admit_date) == str(today.year),
+        )
         .scalar() or 0
     )
 
@@ -482,16 +570,18 @@ def admin_overview():
     total_beds     = sum(WARD_CAPACITY.values())
     available_beds = max(0, total_beds - currently_admitted)
 
-    icu_occupied = Admission.query.filter(
+    icu_occupied = db.session.query(
+        func.count(Admission.patient_id.distinct())
+    ).filter(
         Admission.ward == "ICU",
         Admission.status.in_(["Admitted", "Under Observation"])
-    ).count()
+    ).scalar() or 0
 
     ward_rows = (
-        db.session.query(Admission.ward, func.count(Admission.id).label("count"))
+        db.session.query(Admission.ward, func.count(Admission.patient_id.distinct()).label("count"))
         .filter(Admission.status.in_(["Admitted", "Under Observation"]))
         .group_by(Admission.ward)
-        .order_by(func.count(Admission.id).desc())
+        .order_by(func.count(Admission.patient_id.distinct()).desc())
         .all()
     )
     resource_distribution = [
@@ -503,9 +593,26 @@ def admin_overview():
         for row in ward_rows
     ]
 
-    pending_discharge = Admission.query.filter(
+    pending_discharge = db.session.query(
+        func.count(Admission.patient_id.distinct())
+    ).filter(
         Admission.status == "Under Observation"
-    ).count()
+    ).scalar() or 0
+
+    staff_on_duty = (
+        db.session.query(func.count(Admission.attending_physician.distinct()))
+        .filter(Admission.status.in_(["Admitted", "Under Observation"]))
+        .scalar() or 0
+    )
+
+    twelve_months_ago = (today - timedelta(days=365)).strftime("%Y-%m-%d")
+    cost_12m = (
+        db.session.query(func.sum(Charge.amount))
+        .join(Admission, Admission.id == Charge.admission_id)
+        .filter(Admission.admit_date >= twelve_months_ago)
+        .scalar() or 0
+    )
+    annual_budget = round(cost_12m * 1.15 / 1000) * 1000
 
     return jsonify({
         "total_patients":        total_patients,
@@ -527,8 +634,9 @@ def admin_overview():
         "top_dept":              top_dept_str,
         "procedure_cost_total":  round(proc_cost_total,   2),
         "resource_distribution": resource_distribution,
+        "staff_on_duty":         staff_on_duty,
+        "annual_budget":         annual_budget,
     }), 200
-
 
 @app.get("/admin/charts")
 @jwt_required()
@@ -536,12 +644,17 @@ def admin_charts():
     if not is_admin():
         return jsonify({"msg": "Forbidden"}), 403
 
+    cost_cutoff = f"{datetime.now().year}-01-01"
     cost_rows = (
         db.session.query(
             func.strftime("%Y-%m", Admission.admit_date).label("month"),
             func.sum(Charge.amount).label("total"),
         )
         .join(Charge, Charge.admission_id == Admission.id)
+        .filter(
+            Admission.status == "Discharged",
+            Admission.admit_date >= cost_cutoff,
+        )
         .group_by("month")
         .order_by("month")
         .all()
@@ -551,11 +664,14 @@ def admin_charts():
         for row in cost_rows
     ]
 
-    cutoff = (datetime(2026, 3, 10) - timedelta(weeks=8)).strftime("%Y-%m-%d")
+    cutoff = (datetime.now() - timedelta(weeks=10)).strftime("%Y-%m-%d")
 
     adm_rows = (
         Admission.query
-        .filter(Admission.admit_date >= cutoff)
+        .filter(
+            Admission.status == "Discharged",
+            Admission.admit_date >= cutoff,
+        )
         .order_by(Admission.admit_date)
         .all()
     )
@@ -592,20 +708,277 @@ def admin_charts():
         "adm_discharge":     adm_discharge,
     }), 200
 
-
 @app.get("/admin/activity")
 @jwt_required()
 def admin_activity():
     if not is_admin():
         return jsonify({"msg": "Forbidden"}), 403
 
-    return jsonify([
-        {"id": 1, "time": "2026-03-10 08:20", "actor": "clinician@test.com", "action": "Viewed patient snapshot"},
-        {"id": 2, "time": "2026-03-10 09:14", "actor": "admin@test.com",     "action": "Generated weekly report"},
-        {"id": 3, "time": "2026-03-10 10:02", "actor": "clinician@test.com", "action": "Updated clinical note"},
-        {"id": 4, "time": "2026-03-10 11:30", "actor": "patient@test.com",   "action": "Viewed billing dashboard"},
-    ]), 200
+    activities = []
 
+    note_rows = (
+        db.session.query(ClinicalNote, Patient)
+        .join(Admission, ClinicalNote.admission_id == Admission.id)
+        .join(Patient, Admission.patient_id == Patient.id)
+        .order_by(ClinicalNote.created_at.desc())
+        .limit(8)
+        .all()
+    )
+    for note, pt in note_rows:
+        activities.append({
+            "time":   note.created_at,
+            "actor":  note.author,
+            "action": f"Clinical note added for {pt.first_name} {pt.last_name}",
+        })
+
+    adm_rows = (
+        db.session.query(Admission, Patient)
+        .join(Patient, Admission.patient_id == Patient.id)
+        .order_by(Admission.admit_date.desc())
+        .limit(8)
+        .all()
+    )
+    for adm, pt in adm_rows:
+        activities.append({
+            "time":   adm.admit_date + " 08:00",
+            "actor":  adm.attending_physician,
+            "action": f"{pt.first_name} {pt.last_name} admitted to {adm.ward}",
+        })
+
+    dis_rows = (
+        db.session.query(Admission, Patient)
+        .join(Patient, Admission.patient_id == Patient.id)
+        .filter(Admission.discharge_date.isnot(None))
+        .order_by(Admission.discharge_date.desc())
+        .limit(6)
+        .all()
+    )
+    for adm, pt in dis_rows:
+        activities.append({
+            "time":   adm.discharge_date + " 14:00",
+            "actor":  adm.attending_physician,
+            "action": f"{pt.first_name} {pt.last_name} discharged from {adm.ward}",
+        })
+
+    activities.sort(key=lambda x: x["time"], reverse=True)
+    return jsonify([{"id": i + 1, **a} for i, a in enumerate(activities[:20])]), 200
+
+@app.get("/admin/waste")
+@jwt_required()
+def admin_waste():
+    if not is_admin():
+        return jsonify({"msg": "Forbidden"}), 403
+
+    items = []
+
+    ninety_days_ago = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
+
+    disc_rows = (
+        db.session.query(
+            Admission.ward,
+            func.sum(Medication.cost).label("total"),
+            func.count(Medication.id).label("cnt"),
+        )
+        .join(Medication, Medication.admission_id == Admission.id)
+        .filter(
+            Medication.status.in_(["Discontinued", "Discharged Rx"]),
+            Medication.cost > 0,
+            Admission.admit_date >= ninety_days_ago,
+        )
+        .group_by(Admission.ward)
+        .order_by(func.sum(Medication.cost).desc())
+        .all()
+    )
+    disc_total = round(sum(r.total for r in disc_rows), 0)
+    disc_count = sum(r.cnt for r in disc_rows)
+    if disc_total > 0:
+        top_ward = disc_rows[0].ward if disc_rows else "ICU"
+        items.append({
+            "id": 1,
+            "category": "Unused Medications",
+            "department": top_ward,
+            "value": f"${disc_total:,.0f}",
+            "severity": "high" if disc_total > 5000 else "medium",
+            "detail": f"{disc_count} discontinued medications with unrecovered pharmacy costs.",
+        })
+
+    all_discharged = Admission.query.filter(Admission.discharge_date.isnot(None)).all()
+    if all_discharged:
+        all_los = [
+            max(1, (datetime.strptime(a.discharge_date, "%Y-%m-%d") -
+                    datetime.strptime(a.admit_date,     "%Y-%m-%d")).days)
+            for a in all_discharged
+        ]
+        avg_los_all = sum(all_los) / len(all_los)
+
+        long_stay_threshold = 14
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        active_adms = Admission.query.filter(
+            Admission.status.in_(["Admitted", "Under Observation"]),
+            Admission.admit_date.isnot(None),
+        ).all()
+        prolonged = []
+        for a in active_adms:
+            try:
+                current_los = (
+                    datetime.strptime(today_str,    "%Y-%m-%d") -
+                    datetime.strptime(a.admit_date, "%Y-%m-%d")
+                ).days
+                if current_los > long_stay_threshold:
+                    prolonged.append((a, current_los))
+            except (ValueError, TypeError):
+                pass
+
+        if prolonged:
+            extra_cost = round(sum((los - long_stay_threshold) * 220 for _, los in prolonged))
+            ward_freq: dict = {}
+            for a, _ in prolonged:
+                ward_freq[a.ward] = ward_freq.get(a.ward, 0) + 1
+            top_ward = max(ward_freq, key=ward_freq.get)
+            items.append({
+                "id": 2,
+                "category": "Prolonged Active Stays",
+                "department": top_ward,
+                "value": f"${extra_cost:,.0f}",
+                "severity": "high" if len(prolonged) > 30 else "medium",
+                "detail": (
+                    f"{len(prolonged)} currently admitted patients have exceeded "
+                    f"{long_stay_threshold} days (3.5× the average LOS). Estimated at $220/day in extended overhead."
+                ),
+            })
+
+    historical_cutoff = (datetime.now() - timedelta(days=70)).strftime("%Y-%m-%d")
+    multi_pids = [
+        r[0] for r in
+        db.session.query(Admission.patient_id)
+        .group_by(Admission.patient_id)
+        .having(func.count(Admission.id) > 1)
+        .all()
+    ]
+    if multi_pids:
+        all_multi_adms = (
+            Admission.query
+            .filter(
+                Admission.patient_id.in_(multi_pids),
+                Admission.admit_date < historical_cutoff,
+                Admission.discharge_date.isnot(None),
+            )
+            .order_by(Admission.patient_id, Admission.admit_date)
+            .all()
+        )
+        by_patient: dict = defaultdict(list)
+        for a in all_multi_adms:
+            by_patient[a.patient_id].append(a)
+
+        readmit_count   = 0
+        readmit_ids     = []
+        readmit_wards: dict = {}
+        for pid, adms in by_patient.items():
+            for i in range(len(adms) - 1):
+                prev, curr = adms[i], adms[i + 1]
+                if not prev.discharge_date or not curr.admit_date:
+                    continue
+                try:
+                    gap = (
+                        datetime.strptime(curr.admit_date,      "%Y-%m-%d") -
+                        datetime.strptime(prev.discharge_date,  "%Y-%m-%d")
+                    ).days
+                    if 0 <= gap <= 30:
+                        readmit_count += 1
+                        readmit_ids.append(curr.id)
+                        readmit_wards[curr.ward] = readmit_wards.get(curr.ward, 0) + 1
+                except (ValueError, TypeError):
+                    pass
+
+        if readmit_count > 0:
+            readmit_cost = (
+                db.session.query(func.sum(Charge.amount))
+                .filter(Charge.admission_id.in_(readmit_ids))
+                .scalar() or 0
+            )
+            est_avoidable = round(readmit_cost * 0.20)
+            top_ward = max(readmit_wards, key=readmit_wards.get) if readmit_wards else "General Ward"
+            items.append({
+                "id": 3,
+                "category": "30-Day Readmissions",
+                "department": top_ward,
+                "value": f"${est_avoidable:,.0f}",
+                "severity": "high" if readmit_count > 50 else "medium",
+                "detail": (
+                    f"{readmit_count} patients readmitted within 30 days of prior discharge. "
+                    f"20% of readmission costs attributed as potentially avoidable."
+                ),
+            })
+
+    icu_elective_ids = [
+        r[0] for r in
+        db.session.query(Admission.id)
+        .filter(Admission.ward == "ICU", Admission.admission_type == "Elective")
+        .all()
+    ]
+    if icu_elective_ids:
+        icu_elective_cost = (
+            db.session.query(func.sum(Charge.amount))
+            .filter(Charge.admission_id.in_(icu_elective_ids))
+            .scalar() or 0
+        )
+        est_icu_avoidable = round(icu_elective_cost * 0.30)
+        items.append({
+            "id": 4,
+            "category": "Elective ICU Placements",
+            "department": "ICU",
+            "value": f"${est_icu_avoidable:,.0f}",
+            "severity": "high" if len(icu_elective_ids) > 30 else "medium",
+            "detail": (
+                f"{len(icu_elective_ids)} elective admissions assigned to ICU. "
+                f"30% of associated costs flagged as potentially avoidable resource misallocation."
+            ),
+        })
+
+    therapy_adm_ids = set(
+        r[0] for r in
+        db.session.query(Charge.admission_id)
+        .filter(Charge.category == "therapy")
+        .all()
+    )
+    no_therapy_adms = Admission.query.filter(
+        Admission.discharge_date.isnot(None),
+        Admission.id.notin_(list(therapy_adm_ids)),
+    ).all()
+    long_no_therapy = []
+    for a in no_therapy_adms:
+        try:
+            los = (
+                datetime.strptime(a.discharge_date, "%Y-%m-%d") -
+                datetime.strptime(a.admit_date,     "%Y-%m-%d")
+            ).days
+            if los > 5:
+                long_no_therapy.append((a, los))
+        except (ValueError, TypeError):
+            pass
+    if long_no_therapy:
+        missed_pt_cost = round(sum(los * 120 for _, los in long_no_therapy))
+        nt_wards: dict = {}
+        for a, _ in long_no_therapy:
+            nt_wards[a.ward] = nt_wards.get(a.ward, 0) + 1
+        top_nt_ward = max(nt_wards, key=nt_wards.get) if nt_wards else "General Ward"
+        items.append({
+            "id": 5,
+            "category": "Unbilled PT / OT Sessions",
+            "department": top_nt_ward,
+            "value": f"${missed_pt_cost:,.0f}",
+            "severity": "medium",
+            "detail": (
+                f"{len(long_no_therapy)} patients stayed 5+ days with no physical or "
+                f"occupational therapy charge recorded. Estimated at $120/day."
+            ),
+        })
+
+    total = sum(
+        int(item["value"].replace("$", "").replace(",", ""))
+        for item in items
+    )
+    return jsonify({"items": items, "total": total}), 200
 
 @app.post("/admin/report")
 @jwt_required()
@@ -617,7 +990,6 @@ def admin_report():
     report_type = data.get("report_type", "weekly")
     report_id   = str(uuid.uuid4())
     return jsonify({"report_id": report_id, "status": "queued", "type": report_type}), 200
-
 
 if __name__ == "__main__":
     with app.app_context():

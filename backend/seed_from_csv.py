@@ -5,18 +5,18 @@ import random
 from datetime import datetime, timedelta
 from collections import defaultdict
 
-from app import app
+from app import app, bcrypt
 from models import (
     db, Patient, Admission, Vitals,
     Medication, Procedure, Charge, ClinicalNote, Insurance,
-    Appointment, Message,
+    Appointment, Message, User,
 )
 
 random.seed(42)
 
 CSV_DIR         = os.path.expanduser("~/Downloads/csv/")
-TARGET_PATIENTS = 50
-TODAY           = datetime(2026, 3, 10)
+TARGET_PATIENTS = 1000
+TODAY           = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
 DATE_SHIFT      = timedelta(days=1573)
 MIN_ORIG_DATE   = "2015-01-01"
 
@@ -28,6 +28,18 @@ WARDS = [
     "Cardiology Ward A", "Orthopedic Ward C",
     "Neurology Ward", "Pediatric Ward", "ICU",
 ]
+
+WARD_TO_DEPT = {
+    "General Ward A":    "General Medicine",
+    "General Ward B":    "General Medicine",
+    "Surgical Ward A":   "Surgery",
+    "Surgical Ward B":   "Surgery",
+    "Cardiology Ward A": "Cardiology",
+    "Orthopedic Ward C": "Orthopedics",
+    "Neurology Ward":    "Neurology",
+    "Pediatric Ward":    "Pediatrics",
+    "ICU":               "Critical Care",
+}
 
 APPT_TYPES = [
     "Follow-up Consultation", "Post-op Check", "Lab Review",
@@ -114,12 +126,45 @@ COVERAGE_TIERS = [
     (60, 5000, 1000, 10000),
 ]
 
+PASSWORD_WORDS = [
+    "sunny", "river", "maple", "stone", "delta", "cedar", "noble", "swift",
+    "cloud", "amber", "coral", "frost", "blaze", "grove", "haven", "lunar",
+    "ocean", "pearl", "ridge", "sierra", "tidal", "willow", "azure", "brave",
+    "crisp", "dusky", "eagle", "flash", "glide", "haven", "ivory", "jewel",
+    "kite",  "lance", "mango", "nexus", "olive", "prism", "quill", "raven",
+    "spark", "topaz", "ultra", "vapor", "wheat", "xenon", "yield", "zesty",
+]
+
+_used_emails: set = set()
+
+def gen_password() -> str:
+    return random.choice(PASSWORD_WORDS) + str(random.randint(1000, 9999))
+
+def make_email(first: str, last: str, domain: str) -> str:
+    clean = lambda s: re.sub(r"[^a-z0-9]", "", s.lower())
+    base  = f"{clean(first)}.{clean(last)}"
+    email = f"{base}@{domain}"
+    if email not in _used_emails:
+        _used_emails.add(email)
+        return email
+    i = 2
+    while True:
+        candidate = f"{base}{i}@{domain}"
+        if candidate not in _used_emails:
+            _used_emails.add(candidate)
+            return candidate
+        i += 1
+
+def physician_parts(physician_str: str):
+    parts = physician_str.replace("Dr.", "").strip().split()
+    first = parts[0]  if len(parts) >= 1 else "clinician"
+    last  = parts[-1] if len(parts) >= 2 else "staff"
+    return first, last
 
 def read_csv(filename):
     path = os.path.join(CSV_DIR, filename)
     with open(path, newline="", encoding="utf-8") as f:
         return list(csv.DictReader(f))
-
 
 def shift_date(date_str):
     if not date_str:
@@ -130,10 +175,8 @@ def shift_date(date_str):
     except ValueError:
         return None
 
-
 def clean_name(raw):
     return re.sub(r"\d+", "", raw).strip()
-
 
 def cm_to_height_str(cm_val):
     try:
@@ -144,9 +187,10 @@ def cm_to_height_str(cm_val):
     except (ValueError, TypeError):
         return None
 
-
 def plan_name_for(payer_name):
     name_up = (payer_name or "").upper()
+    if "NO_INSURANCE" in name_up or name_up == "NO_":
+        return "Uninsured / Self-Pay"
     if any(k in name_up for k in ("HMO", "KAISER", "MEDICAID")):
         return random.choice(["HMO Gold Plan", "HMO Silver Plan", "HMO Standard", "Managed Care"])
     if any(k in name_up for k in ("PPO", "BLUE", "BCBS", "AETNA", "UNITED", "CIGNA", "HUMANA")):
@@ -154,7 +198,6 @@ def plan_name_for(payer_name):
     if "MEDICARE" in name_up:
         return random.choice(["Part A & B", "Medicare Advantage"])
     return random.choice(["Choice Plan", "Savings Fund Plan", "Open Access Plan"])
-
 
 def seed():
     print("Loading CSVs…")
@@ -171,6 +214,13 @@ def seed():
             if first and last:
                 physicians.append(f"Dr. {first} {last}")
     physicians = list(dict.fromkeys(physicians))[:25] or ["Dr. Smith"]
+
+    physician_ward: dict[str, str] = {
+        phys: WARDS[i % len(WARDS)] for i, phys in enumerate(physicians)
+    }
+    ward_physicians: dict[str, list] = {}
+    for phys, ward in physician_ward.items():
+        ward_physicians.setdefault(ward, []).append(phys)
 
     patient_payer: dict[str, str] = {}
     for r in read_csv("payer_transitions.csv"):
@@ -256,6 +306,9 @@ def seed():
             db.session.add(patient)
             db.session.flush()
 
+            primary_ward    = random.choice(WARDS)
+            primary_doctors = ward_physicians[primary_ward]
+
             for enc in enc_by_patient[pid]:
                 admit_date     = shift_date(enc["START"])
                 discharge_date = shift_date(enc["STOP"]) if enc.get("STOP") else None
@@ -281,8 +334,8 @@ def seed():
                     status = random.choice(["Admitted", "Under Observation"])
 
                 admission_type = "Emergency" if enc["ENCOUNTERCLASS"] == "emergency" else "Elective"
-                physician      = random.choice(physicians)
-                ward           = random.choice(WARDS)
+                ward           = primary_ward
+                physician      = random.choice(primary_doctors)
 
                 enc_conditions = conditions_by_enc.get(enc["Id"], [])
                 primary_dx     = (
@@ -345,7 +398,7 @@ def seed():
 
                 for m in meds_by_enc.get(enc["Id"], [])[:5]:
                     med_name   = (m.get("DESCRIPTION") or "Unknown Medication")[:120]
-                    cost       = float(m.get("BASE_COST") or 0)
+                    cost       = min(float(m.get("BASE_COST") or 0), 500.0)
                     med_status = "Active" if status != "Discharged" else random.choice(["Discontinued", "Discharged Rx"])
                     db.session.add(Medication(
                         admission_id = admission.id,
@@ -389,21 +442,23 @@ def seed():
                     )
                     db.session.add(ClinicalNote(
                         admission_id = admission.id,
-                        author       = random.choice(physicians),
+                        author       = random.choice(ward_physicians[ward]),
                         note         = note_text,
                         created_at   = note_dt.strftime("%Y-%m-%d %H:%M"),
                     ))
 
-            payer_name = patient_payer.get(pid, "BlueCross BlueShield")
-            plan       = plan_name_for(payer_name)
+            payer_name_raw = patient_payer.get(pid, "BlueCross BlueShield")
+            payer_name = "Self-Pay" if "NO_INSURANCE" in payer_name_raw.upper() else payer_name_raw
+            plan       = plan_name_for(payer_name_raw)
             cov_pct, ded_total, ded_met_base, oop_max = random.choice(COVERAGE_TIERS)
             ded_met = min(ded_total, ded_met_base + random.randint(-200, 200))
             oop_met = min(oop_max,  random.randint(300, int(oop_max * 0.7)))
+            id_prefix = "SP" if payer_name == "Self-Pay" else payer_name[:3].upper()
             db.session.add(Insurance(
                 patient_id        = patient.id,
                 provider          = payer_name,
                 plan_name         = plan,
-                member_id         = f"{payer_name[:3].upper()}-{random.randint(1000000, 9999999)}",
+                member_id         = f"{id_prefix}-{random.randint(1000000, 9999999)}",
                 group_number      = f"GRP-{random.randint(10000, 99999)}",
                 coverage_pct      = cov_pct,
                 deductible_total  = float(ded_total),
@@ -414,12 +469,14 @@ def seed():
                 expiry_date       = "2026-12-31",
             ))
 
+            dept_doctors = primary_doctors
+
             for _ in range(random.randint(2, 4)):
                 future_days = random.randint(1, 90)
                 appt_date   = (TODAY + timedelta(days=future_days)).strftime("%Y-%m-%d")
                 db.session.add(Appointment(
                     patient_id = patient.id,
-                    clinician  = random.choice(physicians),
+                    clinician  = random.choice(dept_doctors),
                     appt_date  = appt_date,
                     appt_time  = random.choice(APPT_TIMES),
                     appt_type  = random.choice(APPT_TYPES),
@@ -434,7 +491,7 @@ def seed():
                 is_read = False if (patient.id == 1 and k < 2) else random.choice([True, True, False])
                 db.session.add(Message(
                     patient_id = patient.id,
-                    sender     = random.choice(physicians),
+                    sender     = random.choice(dept_doctors),
                     subject    = tmpl["subject"],
                     body       = tmpl["body"],
                     created_at = sent_at,
@@ -452,19 +509,105 @@ def seed():
         for adm in all_admissions:
             if activated >= target_active:
                 break
+            bucket = random.random()
+            if bucket < 0.40:
+                days_back = random.randint(1, 7)
+            elif bucket < 0.90:
+                days_back = random.randint(8, 14)
+            elif bucket < 0.96:
+                days_back = random.randint(15, 21)
+            elif bucket < 0.99:
+                days_back = random.randint(22, 35)
+            else:
+                days_back = random.randint(36, 60)
+            adm.admit_date = (TODAY - timedelta(days=days_back)).strftime("%Y-%m-%d")
             adm.discharge_date = None
-            adm.status = random.choice(["Admitted", "Under Observation"])
+            adm.status = "Under Observation" if random.random() < 0.28 else "Admitted"
             for med in adm.medications:
                 med.status = "Active"
             activated += 1
 
+        target_rdc   = int(target_active * 3.0)
+        rdc_count    = 0
+        for adm in all_admissions:
+            if rdc_count >= target_rdc:
+                break
+            if adm.status in ("Admitted", "Under Observation"):
+                continue
+            dc_days_back = random.randint(1, 120)
+            los_days = random.randint(2, 8)
+            adm.discharge_date = (TODAY - timedelta(days=dc_days_back)).strftime("%Y-%m-%d")
+            adm.admit_date     = (TODAY - timedelta(days=dc_days_back + los_days)).strftime("%Y-%m-%d")
+            adm.status         = "Discharged"
+            for med in adm.medications:
+                med.status = random.choice(["Discontinued", "Discharged Rx"])
+            rdc_count += 1
+
+        print("\nGenerating user accounts…")
+        credentials = []
+
+        def stable_pw(first: str) -> str:
+            return re.sub(r"[^a-z]", "", first.lower()) + "2026"
+
+        for p in patients_created:
+            pw    = stable_pw(p.first_name)
+            email = make_email(p.first_name, p.last_name, "gmail.com")
+            p.email = email
+            db.session.add(User(
+                email         = email,
+                password_hash = bcrypt.generate_password_hash(pw).decode("utf-8"),
+                role          = "patient",
+                name          = f"{p.first_name} {p.last_name}",
+                patient_id    = p.id,
+            ))
+            credentials.append(("patient", email, pw, f"{p.first_name} {p.last_name}"))
+
+        unique_physicians = list(dict.fromkeys(physicians))
+        for phys in unique_physicians:
+            first, last   = physician_parts(phys)
+            pw            = stable_pw(first)
+            email         = make_email(first, last, "arinze.com")
+            assigned_ward = physician_ward.get(phys, WARDS[0])
+            dept          = WARD_TO_DEPT.get(assigned_ward, "General Medicine")
+            db.session.add(User(
+                email         = email,
+                password_hash = bcrypt.generate_password_hash(pw).decode("utf-8"),
+                role          = "clinician",
+                name          = phys,
+                department    = dept,
+                patient_id    = None,
+            ))
+            credentials.append(("clinician", email, pw, phys))
+
+        db.session.add(User(
+            email         = "admin@arinze.com",
+            password_hash = bcrypt.generate_password_hash("admin2026").decode("utf-8"),
+            role          = "admin",
+            name          = "System Administrator",
+            patient_id    = None,
+        ))
+        credentials.append(("admin", "admin@arinze.com", "admin2026", "System Administrator"))
+
         db.session.commit()
-        print(f"\n✅ Seeded {len(patients_created)} patients from CSV data.")
+
+        cred_path = os.path.join(os.path.dirname(__file__), "..", "credentials.csv")
+        cred_path = os.path.abspath(cred_path)
+        with open(cred_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["Role", "Name", "Email", "Password"])
+            for role, email, pw, name in sorted(credentials, key=lambda r: (r[0], r[3])):
+                writer.writerow([role.capitalize(), name, email, pw])
+
+        print(f"✅ Seeded {len(patients_created)} patients from CSV data.")
         print(f"   Encounters, vitals, medications, procedures, charges,")
         print(f"   clinical notes, insurance, appointments, and messages created.")
         active_count = Admission.query.filter(Admission.status.in_(["Admitted", "Under Observation"])).count()
         print(f"   Active admissions: {active_count} / {len(all_admissions)} total.")
-
+        print(f"\n   Accounts created:")
+        print(f"     {len(patients_created)} patients  (@gmail.com)")
+        print(f"     {len(unique_physicians)} clinicians (@arinze.com)")
+        print(f"     1 admin           (admin@arinze.com)")
+        print(f"\n   Credentials saved to: {cred_path}")
 
 if __name__ == "__main__":
     seed()

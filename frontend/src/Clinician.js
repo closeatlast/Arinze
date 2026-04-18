@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 
+
 const APPT_TYPES = [
   "Follow-up", "Consultation", "Lab Review", "Physical Exam",
   "Pre-op Assessment", "Post-discharge", "Telemedicine", "Imaging Review",
@@ -32,11 +33,10 @@ function VitalChip({ label, value, alert }) {
   );
 }
 
-function SectionCard({ title, icon, children }) {
+function SectionCard({ title, children }) {
   return (
     <div style={styles.card}>
       <div style={styles.cardHeader}>
-        <span style={styles.cardIcon}>{icon}</span>
         <h3 style={styles.cardTitle}>{title}</h3>
       </div>
       {children}
@@ -55,9 +55,16 @@ function Tag({ text, color }) {
   return <span style={{ ...styles.tag, background: c.bg, color: c.color }}>{text}</span>;
 }
 
+function parseJwt(token) {
+  try { return JSON.parse(atob(token.split(".")[1])); } catch { return {}; }
+}
+
 export default function Clinician() {
   const navigate = useNavigate();
   const token = localStorage.getItem("token");
+  const jwtPayload    = token ? parseJwt(token) : {};
+  const clinicianName = jwtPayload.name       || "Clinician";
+  const clinicianDept = jwtPayload.department || "All Departments";
 
   const [patientList,    setPatientList]    = useState([]);
   const [selectedId,     setSelectedId]     = useState(null);
@@ -74,14 +81,16 @@ export default function Clinician() {
   const [newApptForm,    setNewApptForm]    = useState({ clinician: "", appt_date: "", appt_time: "09:00", appt_type: "Follow-up", notes: "" });
   const [apptSubmitting, setApptSubmitting] = useState(false);
   const [apptSuccess,    setApptSuccess]    = useState(false);
+  const [apptError,      setApptError]      = useState("");
 
   const [messages,       setMessages]       = useState([]);
   const [msgLoading,     setMsgLoading]     = useState(false);
-  const [newMsgForm,     setNewMsgForm]     = useState({ sender: "Clinician", subject: "", body: "" });
+  const [newMsgForm,     setNewMsgForm]     = useState({ sender: "", subject: "", body: "" });
   const [msgSubmitting,  setMsgSubmitting]  = useState(false);
   const [msgSuccess,     setMsgSuccess]     = useState(false);
+  const [msgError,       setMsgError]       = useState("");
 
-  const [notifications,  setNotifications]  = useState({ total: 0, todays_appointments: 0 });
+  const [notifications,  setNotifications]  = useState({ total: 0, unread_messages: 0 });
 
   const [noteForm,       setNoteForm]       = useState({ author: "", note: "" });
   const [noteSubmitting, setNoteSubmitting] = useState(false);
@@ -92,17 +101,26 @@ export default function Clinician() {
   const [vitalsSubmitting, setVitalsSubmitting] = useState(false);
 
   const [showDischarge,       setShowDischarge]       = useState(false);
-  const [dischargeForm,       setDischargeForm]       = useState({ discharge_date: "2026-03-10", summary: "" });
+  const [dischargeForm,       setDischargeForm]       = useState({ discharge_date: new Date().toISOString().split("T")[0], summary: "" });
   const [dischargeSubmitting, setDischargeSubmitting] = useState(false);
 
   const headers = { Authorization: `Bearer ${token}` };
+
+  // Pre-fill clinician name into appointment and message forms once decoded
+  useEffect(() => {
+    if (clinicianName && clinicianName !== "Clinician") {
+      setNewApptForm((p) => ({ ...p, clinician: clinicianName }));
+      setNewMsgForm((p) => ({ ...p, sender: clinicianName }));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clinicianName]);
 
   useEffect(() => {
     if (!token) { navigate("/"); return; }
 
     const fetchList = async () => {
       try {
-        const res = await fetch("http://127.0.0.1:5001/patients", { headers });
+        const res = await fetch("http://127.0.0.1:5001/clinician/patients", { headers });
         if ([401, 422].includes(res.status)) { localStorage.removeItem("token"); navigate("/"); return; }
         const data = await res.json();
         setPatientList(data);
@@ -171,11 +189,16 @@ export default function Clinician() {
 
   const handleLogout = () => { localStorage.removeItem("token"); localStorage.removeItem("role"); navigate("/"); };
 
-  const filtered = patientList.filter(
-    (p) =>
-      `${p.first_name} ${p.last_name}`.toLowerCase().includes(search.toLowerCase()) ||
-      p.mrn.toLowerCase().includes(search.toLowerCase())
+  const filtered = patientList.filter((p) =>
+    `${p.first_name} ${p.last_name}`.toLowerCase().includes(search.toLowerCase()) ||
+    p.mrn.toLowerCase().includes(search.toLowerCase())
   );
+
+  const STATUS_ORDER = ["Admitted", "Under Observation", "Discharged"];
+  const grouped = STATUS_ORDER.reduce((acc, s) => {
+    acc[s] = filtered.filter((p) => p.status === s);
+    return acc;
+  }, {});
 
   const adm    = patient?.admission;
   const vitals = adm?.vitals;
@@ -184,6 +207,7 @@ export default function Clinician() {
   const handleNewAppt = async (e) => {
     e.preventDefault();
     setApptSubmitting(true);
+    setApptError("");
     try {
       const res = await fetch("http://127.0.0.1:5001/appointments", {
         method: "POST",
@@ -195,11 +219,16 @@ export default function Clinician() {
         setAppointments((prev) =>
           [...prev, created].sort((a, b) => a.appt_date.localeCompare(b.appt_date))
         );
-        setNewApptForm({ clinician: "", appt_date: "", appt_time: "09:00", appt_type: "Follow-up", notes: "" });
+        setNewApptForm({ clinician: clinicianName, appt_date: "", appt_time: "09:00", appt_type: "Follow-up", notes: "" });
         setApptSuccess(true);
         setTimeout(() => setApptSuccess(false), 3000);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setApptError(err.msg || "Failed to schedule appointment.");
       }
-    } catch {}
+    } catch {
+      setApptError("Cannot reach the server.");
+    }
     setApptSubmitting(false);
   };
 
@@ -220,6 +249,7 @@ export default function Clinician() {
   const handleSendMsg = async (e) => {
     e.preventDefault();
     setMsgSubmitting(true);
+    setMsgError("");
     try {
       const res = await fetch("http://127.0.0.1:5001/messages", {
         method: "POST",
@@ -229,11 +259,16 @@ export default function Clinician() {
       if (res.ok) {
         const created = await res.json();
         setMessages((prev) => [created, ...prev]);
-        setNewMsgForm({ sender: "Clinician", subject: "", body: "" });
+        setNewMsgForm({ sender: clinicianName, subject: "", body: "" });
         setMsgSuccess(true);
         setTimeout(() => setMsgSuccess(false), 3000);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setMsgError(err.msg || "Failed to send message.");
       }
-    } catch {}
+    } catch {
+      setMsgError("Cannot reach the server.");
+    }
     setMsgSubmitting(false);
   };
 
@@ -335,18 +370,16 @@ export default function Clinician() {
               <span style={styles.notifBadge}>{notifications.total}</span>
             )}
           </div>
-          <span style={styles.navUser}>
-            {notifications.todays_appointments > 0
-              ? `${notifications.todays_appointments} appt${notifications.todays_appointments !== 1 ? "s" : ""} today`
-              : "Clinician Portal"}
-          </span>
+          <span style={styles.navUser}>{clinicianName}</span>
           <button style={styles.logoutBtn} onClick={handleLogout}>Logout</button>
         </div>
       </div>
 
       <div style={styles.body}>
         <aside style={styles.sidebar}>
-          <p style={styles.sidebarLabel}>Patient List</p>
+          {clinicianDept && (
+            <div style={styles.deptBadge}>{clinicianDept}</div>
+          )}
           <input
             placeholder="Search name or MRN…"
             value={search}
@@ -360,28 +393,40 @@ export default function Clinician() {
             <p style={{ fontSize: 13, color: "crimson", padding: "8px 4px" }}>{error}</p>
           ) : (
             <div style={styles.patientList}>
-              {filtered.map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => setSelectedId(p.id)}
-                  style={{
-                    ...styles.patientItem,
-                    background:   p.id === selectedId ? "#eff6ff" : "#fff",
-                    borderColor:  p.id === selectedId ? "#1a56db" : "#e5e7eb",
-                  }}
-                >
-                  <div style={styles.patientAvatar}>
-                    {p.first_name?.[0]}{p.last_name?.[0]}
+              {STATUS_ORDER.map((status) => {
+                const group = grouped[status];
+                if (group.length === 0) return null;
+                return (
+                  <div key={status}>
+                    <div style={styles.groupHeader}>{status} ({group.length})</div>
+                    {group.map((p) => (
+                      <button
+                        key={p.id}
+                        onClick={() => setSelectedId(p.id)}
+                        style={{
+                          ...styles.patientItem,
+                          background:  p.id === selectedId ? "#eff6ff" : "#fff",
+                          borderColor: p.id === selectedId ? "#1a56db" : "#e5e7eb",
+                        }}
+                      >
+                        <div style={styles.patientAvatar}>
+                          {p.first_name?.[0]}{p.last_name?.[0]}
+                        </div>
+                        <div style={{ flex: 1, textAlign: "left", minWidth: 0 }}>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: "#111827", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                            {p.first_name} {p.last_name}
+                          </div>
+                          <div style={{ fontSize: 11, color: "#6b7280" }}>{p.mrn} · {p.ward}</div>
+                        </div>
+                        <StatusPill status={p.status} />
+                      </button>
+                    ))}
                   </div>
-                  <div style={{ flex: 1, textAlign: "left", minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: "#111827", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                      {p.first_name} {p.last_name}
-                    </div>
-                    <div style={{ fontSize: 11, color: "#6b7280" }}>{p.mrn} · {p.ward}</div>
-                  </div>
-                  <StatusPill status={p.status} />
-                </button>
-              ))}
+                );
+              })}
+              {filtered.length === 0 && (
+                <p style={{ fontSize: 13, color: "#9ca3af", padding: "8px 4px" }}>No patients found.</p>
+              )}
             </div>
           )}
         </aside>
@@ -413,17 +458,17 @@ export default function Clinician() {
                   </div>
                   {adm && (
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-                      <span style={styles.infoChip}>📍 {adm.ward} · {adm.bed}</span>
-                      <span style={styles.infoChip}>👨‍⚕️ {adm.attending_physician}</span>
-                      <span style={styles.infoChip}>📅 Admitted: {adm.admit_date}</span>
+                      <span style={styles.infoChip}>{adm.ward} · {adm.bed}</span>
+                      <span style={styles.infoChip}>{adm.attending_physician}</span>
+                      <span style={styles.infoChip}>Admitted: {adm.admit_date}</span>
                       {adm.discharge_date && (
-                        <span style={styles.infoChip}>🏠 Discharged: {adm.discharge_date}</span>
+                        <span style={styles.infoChip}>Discharged: {adm.discharge_date}</span>
                       )}
                     </div>
                   )}
                   {patient.allergies?.length > 0 && (
                     <div style={{ display: "flex", gap: 6, marginTop: 10, alignItems: "center", flexWrap: "wrap" }}>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: "#dc2626" }}>⚠ ALLERGIES:</span>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: "#dc2626" }}>ALLERGIES:</span>
                       {patient.allergies.map((a) => <Tag key={a} text={a} color="red" />)}
                     </div>
                   )}
@@ -433,7 +478,7 @@ export default function Clinician() {
                         style={styles.dischargeBtn}
                         onClick={() => setShowDischarge((v) => !v)}
                       >
-                        🏠 {showDischarge ? "Cancel Discharge" : "Discharge Patient"}
+                        {showDischarge ? "Cancel Discharge" : "Discharge Patient"}
                       </button>
                     </div>
                   )}
@@ -442,7 +487,7 @@ export default function Clinician() {
 
               {showDischarge && adm && adm.status !== "Discharged" && (
                 <div style={styles.dischargePanel}>
-                  <p style={styles.dischargePanelTitle}>📋 Complete Discharge</p>
+                  <p style={styles.dischargePanelTitle}>Complete Discharge</p>
                   <form onSubmit={handleDischarge} style={styles.form2col}>
                     <div>
                       <label style={styles.formLabel}>Discharge Date</label>
@@ -468,7 +513,7 @@ export default function Clinician() {
                         Cancel
                       </button>
                       <button type="submit" style={styles.dischargeConfirmBtn} disabled={dischargeSubmitting}>
-                        {dischargeSubmitting ? "Processing…" : "✓ Confirm Discharge"}
+                        {dischargeSubmitting ? "Processing…" : "Confirm Discharge"}
                       </button>
                     </div>
                   </form>
@@ -477,9 +522,9 @@ export default function Clinician() {
 
               <div style={styles.tabBar}>
                 {[
-                  { key: "snapshot",     label: "🏥 Snapshot" },
-                  { key: "appointments", label: `📅 Appointments${appointments.length ? ` (${appointments.length})` : ""}` },
-                  { key: "messages",     label: `✉️ Messages${messages.length ? ` (${messages.length})` : ""}` },
+                  { key: "snapshot",     label: "Snapshot" },
+                  { key: "appointments", label: `Appointments${appointments.length ? ` (${appointments.length})` : ""}` },
+                  { key: "messages",     label: `Messages${messages.length ? ` (${messages.length})` : ""}` },
                 ].map(({ key, label }) => (
                   <button
                     key={key}
@@ -496,7 +541,7 @@ export default function Clinician() {
                   <div style={styles.placeholder}>No admission on record for this patient.</div>
                 ) : (
                   <div style={styles.grid}>
-                    <SectionCard title="Admission Summary" icon="🏥">
+                    <SectionCard title="Admission Summary">
                       <div style={styles.summaryGrid}>
                         <div style={styles.summaryItem}>
                           <span style={styles.summaryLabel}>Chief Complaint</span>
@@ -525,13 +570,13 @@ export default function Clinician() {
 
                     <div style={styles.card}>
                       <div style={styles.cardHeader}>
-                        <span style={styles.cardIcon}>💓</span>
+                        <span style={styles.cardIcon}></span>
                         <h3 style={styles.cardTitle}>Vitals Snapshot</h3>
                         <button
                           style={styles.editSmallBtn}
                           onClick={editingVitals ? () => setEditingVitals(false) : openVitalsEditor}
                         >
-                          {editingVitals ? "✕ Cancel" : "✏ Edit Vitals"}
+                          {editingVitals ? "Cancel" : "Edit Vitals"}
                         </button>
                       </div>
                       {editingVitals ? (
@@ -578,7 +623,7 @@ export default function Clinician() {
                       )}
                     </div>
 
-                    <SectionCard title="Medications" icon="💊">
+                    <SectionCard title="Medications">
                       {adm.medications?.length > 0 ? (
                         <table style={styles.table}>
                           <thead>
@@ -602,7 +647,7 @@ export default function Clinician() {
                       ) : <p style={{ fontSize: 13, color: "#9ca3af" }}>No medications recorded.</p>}
                     </SectionCard>
 
-                    <SectionCard title="Clinical Notes" icon="📋">
+                    <SectionCard title="Clinical Notes">
                       {adm.clinical_notes?.length > 0 ? (
                         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                           {adm.clinical_notes.map((n) => (
@@ -620,7 +665,7 @@ export default function Clinician() {
                       <div style={styles.addNoteSection}>
                         <p style={styles.addNoteTitle}>Add Clinical Note</p>
                         {noteSuccess && (
-                          <div style={{ ...styles.successBanner, marginBottom: 10 }}>✅ Note added successfully.</div>
+                          <div style={{ ...styles.successBanner, marginBottom: 10 }}>Note added successfully.</div>
                         )}
                         <form onSubmit={handleAddNote} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                           <input
@@ -651,9 +696,12 @@ export default function Clinician() {
 
               {activeTab === "appointments" && (
                 <div>
-                  <SectionCard title="Schedule New Appointment" icon="➕">
+                  <SectionCard title="Schedule New Appointment">
                     {apptSuccess && (
-                      <div style={styles.successBanner}>✅ Appointment scheduled successfully!</div>
+                      <div style={styles.successBanner}>Appointment scheduled successfully.</div>
+                    )}
+                    {apptError && (
+                      <div style={styles.errorBanner}>{apptError}</div>
                     )}
                     <form onSubmit={handleNewAppt} style={styles.form2col}>
                       <div>
@@ -729,7 +777,7 @@ export default function Clinician() {
                                 <StatusPill status={a.status} />
                               </div>
                               <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
-                                📅 {a.appt_date} at {a.appt_time} &nbsp;·&nbsp; 👨‍⚕️ {a.clinician}
+                                {a.appt_date} at {a.appt_time} &nbsp;·&nbsp; {a.clinician}
                               </div>
                               {a.notes && (
                                 <p style={{ margin: "4px 0 0", fontSize: 12, color: "#4b5563" }}>{a.notes}</p>
@@ -755,9 +803,12 @@ export default function Clinician() {
 
               {activeTab === "messages" && (
                 <div>
-                  <SectionCard title="Send Message to Patient" icon="✉️">
+                  <SectionCard title="Send Message to Patient">
                     {msgSuccess && (
-                      <div style={styles.successBanner}>✅ Message sent successfully!</div>
+                      <div style={styles.successBanner}>Message sent successfully.</div>
+                    )}
+                    {msgError && (
+                      <div style={styles.errorBanner}>{msgError}</div>
                     )}
                     <form onSubmit={handleSendMsg} style={styles.formSingle}>
                       <div>
@@ -849,8 +900,10 @@ const styles = {
 
   sidebar:     { width: 260, minWidth: 260, background: "#fff", borderRight: "1px solid #e5e7eb", display: "flex", flexDirection: "column", padding: "16px 12px", overflowY: "auto" },
   sidebarLabel:{ margin: "0 0 10px", fontSize: 11, fontWeight: 700, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.08em", paddingLeft: 4 },
+  deptBadge:   { marginBottom: 10, padding: "5px 10px", background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 7, fontSize: 12, fontWeight: 700, color: "#1a56db" },
   searchInput: { width: "100%", padding: "8px 10px", border: "1px solid #e5e7eb", borderRadius: 8, fontSize: 13, marginBottom: 10, boxSizing: "border-box", outline: "none" },
   patientList: { display: "flex", flexDirection: "column", gap: 6 },
+  groupHeader: { fontSize: 10, fontWeight: 700, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.08em", padding: "10px 4px 4px", borderTop: "1px solid #f3f4f6", marginTop: 4 },
   patientItem: { display: "flex", alignItems: "center", gap: 10, padding: "10px 10px", border: "1px solid", borderRadius: 10, cursor: "pointer", background: "#fff", width: "100%", transition: "all 0.15s" },
   patientAvatar: { width: 36, height: 36, borderRadius: "50%", background: "#dbeafe", color: "#1e40af", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 13, flexShrink: 0 },
 
@@ -898,6 +951,7 @@ const styles = {
 
   sectionHeading: { margin: "0 0 12px", fontSize: 11, fontWeight: 700, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.08em" },
   successBanner:  { background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 8, padding: "12px 16px", color: "#166534", fontSize: 13, marginBottom: 16 },
+  errorBanner:    { background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "12px 16px", color: "#991b1b", fontSize: 13, marginBottom: 16 },
 
   form2col:    { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px 20px" },
   formSingle:  { display: "flex", flexDirection: "column", gap: 12 },

@@ -10,17 +10,7 @@ import {
   Legend,
 } from "recharts";
 
-const ANNUAL_BUDGET = 900000;
-const STAFF_ON_DUTY = 184;
 
-const wasteHighlights = [
-  { id: 1, category: "Unused Medications",   department: "ICU",          value: "$4,210", severity: "high",   detail: "Expired stock not returned to pharmacy within window." },
-  { id: 2, category: "Redundant Lab Orders", department: "ER",           value: "$2,880", severity: "high",   detail: "Duplicate CBC orders placed within 4-hour window for same patients." },
-  { id: 3, category: "Extended LOS",         department: "Surgery",      value: "$7,640", severity: "high",   detail: "8 patients exceeded expected length of stay by 2+ days." },
-  { id: 4, category: "Idle Equipment",       department: "Radiology",    value: "$1,950", severity: "medium", detail: "MRI unit idle 14% above benchmark during peak hours." },
-  { id: 5, category: "Supply Overstocking",  department: "General Ward", value: "$1,120", severity: "medium", detail: "Surgical gloves and gauze overstocked by 40% vs consumption rate." },
-  { id: 6, category: "Missed Billing Codes", department: "Billing",      value: "$3,300", severity: "low",    detail: "Procedure codes omitted on 11 patient invoices this month." },
-];
 
 function Card({ title, children }) {
   return (
@@ -41,15 +31,6 @@ function StatTile({ label, value, sub, color }) {
   );
 }
 
-function SeverityBadge({ level }) {
-  const map = {
-    high:   { bg: "#fee2e2", color: "#991b1b" },
-    medium: { bg: "#fef9c3", color: "#854d0e" },
-    low:    { bg: "#dcfce7", color: "#166534" },
-  };
-  const s = map[level];
-  return <span style={{ ...styles.badge, background: s.bg, color: s.color }}>{level.charAt(0).toUpperCase() + level.slice(1)}</span>;
-}
 
 function ResourceBar({ label, allocated, used }) {
   const pct       = allocated > 0 ? Math.round((used / allocated) * 100) : 0;
@@ -78,7 +59,7 @@ export default function Admin() {
   const [charts,         setCharts]         = useState(null);
   const [loading,        setLoading]        = useState(true);
   const [error,          setError]          = useState("");
-  const [activeWaste,    setActiveWaste]    = useState(null);
+  const [clinicians,     setClinicians]     = useState({ clinicians: [], total: 0 });
   const [notifications,  setNotifications]  = useState({ total: 0, admitted_patients: 0 });
 
   useEffect(() => {
@@ -88,19 +69,22 @@ export default function Admin() {
 
     const fetchAll = async () => {
       try {
-        const [ovRes, chRes] = await Promise.all([
-          fetch("http://127.0.0.1:5001/admin/overview", { headers }),
-          fetch("http://127.0.0.1:5001/admin/charts",   { headers }),
+        const [ovRes, chRes, clinRes] = await Promise.all([
+          fetch("http://127.0.0.1:5001/admin/overview",   { headers }),
+          fetch("http://127.0.0.1:5001/admin/charts",     { headers }),
+          fetch("http://127.0.0.1:5001/admin/clinicians", { headers }),
         ]);
 
         if ([401, 422].includes(ovRes.status)) { localStorage.removeItem("token"); navigate("/"); return; }
         if (ovRes.status === 403) { setError("Not authorized."); setLoading(false); return; }
 
-        const ovData = ovRes.ok ? await ovRes.json() : null;
-        const chData = chRes.ok ? await chRes.json() : null;
+        const ovData   = ovRes.ok  ? await ovRes.json()  : null;
+        const chData   = chRes.ok  ? await chRes.json()  : null;
+        const clinData = clinRes.ok ? await clinRes.json() : { clinicians: [], total: 0 };
 
         setOverview(ovData);
         setCharts(chData);
+        setClinicians(clinData);
       } catch {
         setError("Could not load dashboard. Is the backend running?");
       } finally {
@@ -125,13 +109,10 @@ export default function Admin() {
   if (error)   return <div style={{ ...styles.centered, color: "crimson" }}>{error}</div>;
 
   const occupancyPct = overview ? Math.round((overview.currently_admitted / overview.total_beds) * 100) : 0;
-  const budgetPct    = overview ? Math.round((overview.cost_mtd / (ANNUAL_BUDGET / 12)) * 100) : 0;
+  const budgetPct    = overview ? Math.round((overview.cost_ytd / overview.annual_budget) * 100) : 0;
 
   const downloadReport = () => {
     const ov = overview || {};
-    const wasteRows = wasteHighlights.map((w) =>
-      `<tr><td>${w.category}</td><td>${w.department}</td><td style="text-align:right">${w.value}</td><td>${w.severity.toUpperCase()}</td></tr>`
-    ).join("");
     const resourceRows = (ov.resource_distribution || []).map((r) => {
       const pct = ov.total_beds > 0 ? Math.round((r.used / r.allocated) * 100) : 0;
       return `<tr><td>${r.label}</td><td style="text-align:right">${r.used}</td><td style="text-align:right">${r.allocated}</td><td style="text-align:right">${pct}%</td></tr>`;
@@ -171,8 +152,8 @@ export default function Admin() {
   <div class="stat">Cost MTD <strong>${fmt(ov.cost_mtd ?? 0)}</strong></div>
   <div class="stat">Cost Last Month <strong>${fmt(ov.cost_last_month ?? 0)}</strong></div>
   <div class="stat">Cost YTD <strong>${fmt(ov.cost_ytd ?? 0)}</strong></div>
-  <div class="stat">Annual Budget <strong>${fmt(ANNUAL_BUDGET)}</strong></div>
-  <div class="stat">Budget Used (MTD) <strong>${budgetPct}%</strong></div>
+  <div class="stat">Annual Budget <strong>${fmt(ov.annual_budget ?? 0)}</strong></div>
+  <div class="stat">Budget Used (YTD) <strong>${budgetPct}%</strong></div>
   <div class="stat">Avg Cost / Patient <strong>${fmt(ov.avg_cost_per_patient ?? 0)}</strong></div>
   <div class="stat">Top Cost Category <strong>${ov.top_dept ?? "—"}</strong></div>
   <div class="stat">Total Procedure Cost <strong>${fmt(ov.procedure_cost_total ?? 0)}</strong></div>
@@ -182,9 +163,6 @@ export default function Admin() {
 <table><thead><tr><th>Ward</th><th style="text-align:right">Occupied</th><th style="text-align:right">Capacity</th><th style="text-align:right">Utilization</th></tr></thead>
 <tbody>${resourceRows || "<tr><td colspan='4'>No data</td></tr>"}</tbody></table>
 
-<h2>Waste Highlights</h2>
-<table><thead><tr><th>Category</th><th>Department</th><th style="text-align:right">Estimated Value</th><th>Severity</th></tr></thead>
-<tbody>${wasteRows}</tbody></table>
 </body></html>`;
 
     const w = window.open("", "_blank");
@@ -214,7 +192,7 @@ export default function Admin() {
               ? `${notifications.admitted_patients} admitted`
               : "Central Medical Center"}
           </span>
-          <button style={styles.reportBtn} onClick={downloadReport}>⬇ Report</button>
+          <button style={styles.reportBtn} onClick={downloadReport}>Download Report</button>
           <button style={styles.logoutBtn} onClick={handleLogout}>Logout</button>
         </div>
       </div>
@@ -223,7 +201,7 @@ export default function Admin() {
 
         <div style={styles.tilesRow}>
           <StatTile label="Cost MTD"          color="#1a56db" value={fmt(overview.cost_mtd)}           sub={`vs ${fmt(overview.cost_last_month)} last mo`} />
-          <StatTile label="YTD Spend"         color="#7c3aed" value={fmt(overview.cost_ytd)}           sub={`of ${fmt(ANNUAL_BUDGET)} budget`} />
+          <StatTile label="YTD Spend"         color="#7c3aed" value={fmt(overview.cost_ytd)}           sub={`of ${fmt(overview.annual_budget)} budget`} />
           <StatTile label="Admissions (7d)"   color="#0891b2" value={overview.admissions_7d}           sub={`${overview.discharges_7d} discharges`} />
           <StatTile label="Bed Occupancy"     color="#059669" value={`${occupancyPct}%`}               sub={`${overview.currently_admitted} / ${overview.total_beds} beds`} />
           <StatTile label="Avg Length of Stay"color="#d97706" value={`${overview.avg_los} days`}       sub={`${overview.total_patients} total patients`} />
@@ -231,7 +209,7 @@ export default function Admin() {
         </div>
 
         <div style={styles.chartRow}>
-          <Card title="Cost Over Time (Monthly)">
+          <Card title="Monthly Billing — Discharged Patients">
             <ResponsiveContainer width="100%" height={240}>
               <LineChart data={costOverTime} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
@@ -259,28 +237,17 @@ export default function Admin() {
           </Card>
         </div>
 
-        <Card title="Waste Highlights">
-          <div style={styles.wasteGrid}>
-            {wasteHighlights.map((w) => (
-              <div key={w.id}
-                style={{ ...styles.wasteCard, borderColor: activeWaste === w.id ? "#1a56db" : "#e5e7eb", background: activeWaste === w.id ? "#eff6ff" : "#fff", cursor: "pointer" }}
-                onClick={() => setActiveWaste(activeWaste === w.id ? null : w.id)}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: "#111827" }}>{w.category}</span>
-                  <SeverityBadge level={w.severity} />
+        <Card title={`Clinicians on Duty — ${clinicians.total} active`}>
+          <div style={styles.clinicianGrid}>
+            {clinicians.clinicians.length === 0
+              ? <p style={{ fontSize: 13, color: "#9ca3af", gridColumn: "1/-1" }}>No active admissions.</p>
+              : clinicians.clinicians.map((c) => (
+                <div key={c.name} style={styles.clinicianRow}>
+                  <span style={styles.clinicianName}>{c.name}</span>
+                  <span style={styles.clinicianBadge}>{c.active_patients} patient{c.active_patients !== 1 ? "s" : ""}</span>
                 </div>
-                <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 6 }}>{w.department}</div>
-                <div style={{ fontSize: 18, fontWeight: 800, color: "#dc2626" }}>{w.value}</div>
-                {activeWaste === w.id && (
-                  <p style={{ margin: "10px 0 0", fontSize: 12, color: "#374151", lineHeight: 1.6, borderTop: "1px solid #e5e7eb", paddingTop: 8 }}>{w.detail}</p>
-                )}
-              </div>
-            ))}
-          </div>
-          <div style={{ marginTop: 14, padding: "10px 14px", background: "#fef9c3", borderRadius: 8, fontSize: 13, color: "#854d0e", display: "flex", justifyContent: "space-between" }}>
-            <span>⚠ Total Identified Waste This Month</span>
-            <strong>{fmt(wasteHighlights.reduce((s, w) => s + parseInt(w.value.replace(/[$,]/g, "")), 0))}</strong>
+              ))
+            }
           </div>
         </Card>
 
@@ -292,7 +259,7 @@ export default function Admin() {
               <OvItem label="Occupied"       value={overview.currently_admitted} color="#1a56db" />
               <OvItem label="Available"      value={overview.available_beds}     color="#059669" />
               <OvItem label="ICU Beds"       value={`${overview.icu_occupied} / ${overview.icu_beds}`} />
-              <OvItem label="Staff On Duty"  value={STAFF_ON_DUTY} />
+              <OvItem label="Staff On Duty"  value={overview.staff_on_duty} />
               <OvItem label="Occupancy Rate" value={`${occupancyPct}%`} color={occupancyPct > 85 ? "#dc2626" : "#059669"} />
             </div>
           </Card>
@@ -302,14 +269,14 @@ export default function Admin() {
               <OvItem label="Cost MTD"       value={fmt(overview.cost_mtd)}          color="#1a56db" />
               <OvItem label="Last Month"     value={fmt(overview.cost_last_month)} />
               <OvItem label="YTD Spend"      value={fmt(overview.cost_ytd)} />
-              <OvItem label="Annual Budget"  value={fmt(ANNUAL_BUDGET)} />
+              <OvItem label="Annual Budget"  value={fmt(overview.annual_budget)} />
               <OvItem label="Top Category"   value={overview.top_dept} small />
               <OvItem label="Avg / Patient"  value={fmt(overview.avg_cost_per_patient)} />
             </div>
             <div style={styles.barTrack}>
               <div style={{ ...styles.barFill, width: `${Math.min(budgetPct, 100)}%`, background: budgetPct > 90 ? "#dc2626" : "#1a56db" }} />
             </div>
-            <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>{budgetPct}% of monthly budget used</div>
+            <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>{budgetPct}% of annual budget used (YTD)</div>
           </Card>
 
           <Card title="Patient Flow">
@@ -370,10 +337,6 @@ const styles = {
   card:     { background: "#fff", borderRadius: 12, padding: "20px 22px", boxShadow: "0 1px 4px rgba(0,0,0,0.07)", border: "1px solid #e5e7eb" },
   cardTitle:{ margin: "0 0 16px", fontSize: 14, fontWeight: 700, color: "#111827", textTransform: "uppercase", letterSpacing: "0.05em", paddingBottom: 10, borderBottom: "1px solid #f3f4f6" },
 
-  wasteGrid:{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 },
-  wasteCard:{ border: "1px solid", borderRadius: 10, padding: "14px 16px", transition: "all 0.15s" },
-  badge:    { fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 20 },
-
   summaryGrid: { display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 20 },
   overviewGrid:{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 16px" },
   overviewItem:{ display: "flex", flexDirection: "column", gap: 2 },
@@ -382,4 +345,9 @@ const styles = {
 
   barTrack: { height: 8, background: "#e5e7eb", borderRadius: 99, overflow: "hidden", marginTop: 10 },
   barFill:  { height: "100%", borderRadius: 99, transition: "width 0.4s ease" },
+
+  clinicianGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: "8px 16px" },
+  clinicianRow:  { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 10px", background: "#f9fafb", borderRadius: 8, border: "1px solid #e5e7eb" },
+  clinicianName: { fontSize: 13, fontWeight: 600, color: "#111827" },
+  clinicianBadge:{ fontSize: 11, fontWeight: 700, color: "#1a56db", background: "#eff6ff", padding: "2px 8px", borderRadius: 20 },
 };

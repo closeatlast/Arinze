@@ -46,6 +46,10 @@ export default function Login() {
             <span style={styles.logoDot} />
             <span style={styles.logoText}>Arinze</span>
           </div>
+          <h1 style={styles.heroTitle}>Smarter hospital management, all in one place.</h1>
+          <p style={styles.heroSub}>
+            Arinze Health Systems gives administrators, clinicians, and patients a unified platform to manage admissions, track care, and handle billing.
+          </p>
         </div>
 
         <div style={{ ...styles.circle, width: 340, height: 340, top: -80, right: -120, opacity: 0.08 }} />
@@ -64,7 +68,7 @@ export default function Login() {
 
           {error && (
             <div style={styles.errorBox}>
-              <span style={styles.errorIcon}>⚠</span> {error}
+              {error}
             </div>
           )}
 
@@ -102,25 +106,24 @@ export default function Login() {
           </button>
 
           <div style={styles.roleHints}>
-            <p style={styles.hintTitle}>Demo accounts</p>
+            <p style={styles.hintTitle}>Quick access</p>
             <div style={styles.hintGrid}>
               {[
-                { role: "Admin",     email: "admin@test.com",     color: "#7c3aed" },
-                { role: "Clinician", email: "clinician@test.com", color: "#0891b2" },
-                { role: "Patient",   email: "patient@test.com",   color: "#059669" },
+                { role: "Admin",     email: "admin@arinze.com",         password: "admin2026",  color: "#7c3aed" },
+                { role: "Clinician", email: "almeta.carter@arinze.com", password: "almeta2026", color: "#0891b2" },
+                { role: "Patient",   email: "abel.dooley@gmail.com",    password: "abel2026",   color: "#059669" },
               ].map((h) => (
                 <button
                   key={h.role}
                   type="button"
                   style={{ ...styles.hintChip, borderColor: h.color, color: h.color }}
-                  onClick={() => { setEmail(h.email); setPassword("1234"); setError(""); }}
+                  onClick={() => { setEmail(h.email); setPassword(h.password); setError(""); }}
                 >
                   <span style={{ ...styles.hintDot, background: h.color }} />
                   {h.role}
                 </button>
               ))}
             </div>
-            <p style={styles.hintNote}>Click a role to auto-fill · Password: <code>1234</code></p>
           </div>
         </form>
 
@@ -170,6 +173,19 @@ const styles = {
     fontWeight: 800,
     color: "#fff",
     letterSpacing: "0.02em",
+  },
+  heroTitle: {
+    fontSize: 32,
+    fontWeight: 800,
+    color: "#fff",
+    lineHeight: 1.25,
+    margin: "0 0 16px",
+  },
+  heroSub: {
+    fontSize: 15,
+    color: "#bfdbfe",
+    lineHeight: 1.7,
+    margin: 0,
   },
   circle: {
     position: "absolute",
@@ -327,13 +343,6 @@ const styles = {
     borderRadius: "50%",
     flexShrink: 0,
   },
-  hintNote: {
-    margin: "10px 0 0",
-    fontSize: 11,
-    color: "#9ca3af",
-    textAlign: "center",
-  },
-
   footer: {
     marginTop: 20,
     fontSize: 12,
