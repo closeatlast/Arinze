@@ -57,6 +57,7 @@ export default function Patient() {
 
   const [appointments,  setAppointments]  = useState([]);
   const [apptLoading,   setApptLoading]   = useState(false);
+  const [expandedAppt,  setExpandedAppt]  = useState(null);
 
   const [messages,      setMessages]      = useState([]);
   const [msgLoading,    setMsgLoading]    = useState(false);
@@ -461,38 +462,81 @@ export default function Patient() {
             <p style={styles.empty}>No appointments on record.</p>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              {appointments.map((a) => (
-                <div key={a.id} style={styles.apptCard}>
-                  <div style={styles.apptDateBox}>
-                    <span style={styles.apptDateDay}>{a.appt_date?.split("-")[2]}</span>
-                    <span style={styles.apptDateMon}>
-                      {new Date(a.appt_date + "T00:00:00").toLocaleString("default", { month: "short" })}
-                    </span>
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                        <span style={{ fontWeight: 700, fontSize: 15, color: "#111827" }}>{a.appt_type}</span>
-                        <ApptPill status={a.status} />
+              {appointments.map((a) => {
+                const isOpen = expandedAppt === a.id;
+                const apptDate = new Date(a.appt_date + "T00:00:00");
+                const dayNum = a.appt_date?.split("-")[2];
+                const monthStr = apptDate.toLocaleString("default", { month: "short" });
+                const yearStr = apptDate.getFullYear();
+                const fullDate = apptDate.toLocaleString("default", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+                return (
+                  <div key={a.id} style={{ ...styles.apptCard, cursor: "pointer", transition: "box-shadow 0.15s" }}
+                    onClick={() => setExpandedAppt(isOpen ? null : a.id)}>
+                    <div style={styles.apptDateBox}>
+                      <span style={styles.apptDateDay}>{dayNum}</span>
+                      <span style={styles.apptDateMon}>{monthStr}</span>
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                          <span style={{ fontWeight: 700, fontSize: 15, color: "#111827" }}>{a.appt_type}</span>
+                          <ApptPill status={a.status} />
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }} onClick={(e) => e.stopPropagation()}>
+                          {a.status === "Scheduled" && (
+                            <button style={styles.cancelApptBtn} onClick={() => handleCancelAppt(a.id)}>
+                              Cancel
+                            </button>
+                          )}
+                          <span style={{ fontSize: 12, color: "#9ca3af" }}>{isOpen ? "▲" : "▼"}</span>
+                        </div>
                       </div>
-                      {a.status === "Scheduled" && (
-                        <button
-                          style={styles.cancelApptBtn}
-                          onClick={() => handleCancelAppt(a.id)}
-                        >
-                          Cancel
-                        </button>
+                      <div style={{ fontSize: 13, color: "#6b7280", marginTop: 4 }}>
+                        {a.appt_time} &nbsp;·&nbsp; {a.clinician}
+                      </div>
+
+                      {isOpen && (
+                        <div style={styles.apptSummary} onClick={(e) => e.stopPropagation()}>
+                          <div style={styles.apptSummaryGrid}>
+                            <div style={styles.apptSummaryItem}>
+                              <span style={styles.apptSummaryLabel}>Date</span>
+                              <span style={styles.apptSummaryValue}>{fullDate}</span>
+                            </div>
+                            <div style={styles.apptSummaryItem}>
+                              <span style={styles.apptSummaryLabel}>Time</span>
+                              <span style={styles.apptSummaryValue}>{a.appt_time}</span>
+                            </div>
+                            <div style={styles.apptSummaryItem}>
+                              <span style={styles.apptSummaryLabel}>Type</span>
+                              <span style={styles.apptSummaryValue}>{a.appt_type}</span>
+                            </div>
+                            <div style={styles.apptSummaryItem}>
+                              <span style={styles.apptSummaryLabel}>Provider</span>
+                              <span style={styles.apptSummaryValue}>{a.clinician}</span>
+                            </div>
+                            <div style={styles.apptSummaryItem}>
+                              <span style={styles.apptSummaryLabel}>Status</span>
+                              <span style={styles.apptSummaryValue}><ApptPill status={a.status} /></span>
+                            </div>
+                          </div>
+                          {a.notes ? (
+                            <div style={styles.apptNoteBox}>
+                              <span style={styles.apptNoteLabel}>
+                                {a.status === "Completed" ? "Visit Summary" : "Appointment Notes"}
+                              </span>
+                              <p style={styles.apptNoteText}>{a.notes}</p>
+                            </div>
+                          ) : (
+                            <p style={{ fontSize: 13, color: "#9ca3af", marginTop: 12 }}>
+                              {a.status === "Completed" ? "No visit summary on file." : "No additional notes."}
+                            </p>
+                          )}
+                        </div>
                       )}
                     </div>
-                    <div style={{ fontSize: 13, color: "#6b7280", marginTop: 4 }}>
-                      {a.appt_time} &nbsp;·&nbsp; {a.clinician}
-                    </div>
-                    {a.notes && (
-                      <p style={{ margin: "4px 0 0", fontSize: 13, color: "#4b5563" }}>{a.notes}</p>
-                    )}
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -627,6 +671,15 @@ const styles = {
   msgCard:     { background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: "18px 20px", boxShadow: "0 1px 3px rgba(0,0,0,0.06)" },
   replyBtn:        { padding: "5px 12px", fontSize: 12, fontWeight: 600, border: "1px solid #d1d5db", borderRadius: 6, background: "#f9fafb", cursor: "pointer", color: "#374151" },
   cancelApptBtn:   { padding: "5px 14px", fontSize: 12, fontWeight: 600, border: "1px solid #fca5a5", borderRadius: 6, background: "#fff1f2", cursor: "pointer", color: "#b91c1c" },
+
+  apptSummary:      { marginTop: 16, paddingTop: 16, borderTop: "1px solid #f3f4f6" },
+  apptSummaryGrid:  { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: "10px 24px", marginBottom: 14 },
+  apptSummaryItem:  { display: "flex", flexDirection: "column", gap: 2 },
+  apptSummaryLabel: { fontSize: 11, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.04em" },
+  apptSummaryValue: { fontSize: 13, fontWeight: 500, color: "#111827" },
+  apptNoteBox:      { background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 8, padding: "12px 14px" },
+  apptNoteLabel:    { display: "block", fontSize: 11, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6 },
+  apptNoteText:     { margin: 0, fontSize: 13, color: "#374151", lineHeight: 1.6 },
   unreadBadge: { fontSize: 11, fontWeight: 700, background: "#1a56db", color: "#fff", padding: "2px 8px", borderRadius: 20 },
   markReadBtn: { padding: "5px 14px", border: "1px solid #bfdbfe", borderRadius: 7, background: "#eff6ff", color: "#1a56db", fontSize: 12, fontWeight: 600, cursor: "pointer" },
   downloadBtn: { padding: "9px 16px", border: "1px solid rgba(255,255,255,0.5)", borderRadius: 8, background: "rgba(255,255,255,0.15)", color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" },
