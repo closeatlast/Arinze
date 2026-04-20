@@ -60,6 +60,9 @@ export default function Patient() {
 
   const [messages,      setMessages]      = useState([]);
   const [msgLoading,    setMsgLoading]    = useState(false);
+  const [replyingTo,    setReplyingTo]    = useState(null);
+  const [replyBody,     setReplyBody]     = useState("");
+  const [replySending,  setReplySending]  = useState(false);
 
   const [notifications, setNotifications] = useState({ total: 0, unread_messages: 0, upcoming_appointments: 0 });
 
@@ -129,6 +132,25 @@ export default function Patient() {
         }));
       }
     } catch {}
+  };
+
+  const handleReply = async (msgId) => {
+    if (!replyBody.trim()) return;
+    setReplySending(true);
+    try {
+      const res = await fetch(`http://127.0.0.1:5001/messages/${msgId}/reply`, {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify({ body: replyBody }),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setMessages((prev) => prev.map((m) => (m.id === msgId ? updated : m)));
+        setReplyingTo(null);
+        setReplyBody("");
+      }
+    } catch {}
+    setReplySending(false);
   };
 
   const handleLogout = () => { localStorage.removeItem("token"); localStorage.removeItem("role"); navigate("/"); };
@@ -469,21 +491,52 @@ export default function Patient() {
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, flexWrap: "wrap" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                       <span style={{ fontWeight: 700, fontSize: 15, color: "#111827" }}>{m.subject}</span>
-                      {!m.is_read && (
-                        <span style={styles.unreadBadge}>New</span>
-                      )}
+                      {!m.is_read && <span style={styles.unreadBadge}>New</span>}
                     </div>
                     <span style={{ fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{m.created_at}</span>
                   </div>
                   <p style={{ margin: "8px 0 0", fontSize: 14, color: "#374151", lineHeight: 1.7 }}>{m.body}</p>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10 }}>
                     <span style={{ fontSize: 12, color: "#9ca3af" }}>From: {m.sender}</span>
-                    {!m.is_read && (
-                      <button style={styles.markReadBtn} onClick={() => handleMarkRead(m.id)}>
-                        Mark as Read
+                    <div style={{ display: "flex", gap: 8 }}>
+                      {!m.is_read && (
+                        <button style={styles.markReadBtn} onClick={() => handleMarkRead(m.id)}>Mark as Read</button>
+                      )}
+                      <button style={styles.replyBtn} onClick={() => { setReplyingTo(replyingTo === m.id ? null : m.id); setReplyBody(""); }}>
+                        {replyingTo === m.id ? "Cancel" : "Reply"}
                       </button>
-                    )}
+                    </div>
                   </div>
+
+                  {m.replies && m.replies.length > 0 && (
+                    <div style={{ marginTop: 12, borderTop: "1px solid #e5e7eb", paddingTop: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+                      {m.replies.map((r) => (
+                        <div key={r.id} style={{ paddingLeft: 16, borderLeft: `3px solid ${r.sender === "Patient" || !r.sender.startsWith("Dr.") ? "#6b7280" : "#1a56db"}`, background: "#f9fafb", borderRadius: 6, padding: "10px 14px" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                            <span style={{ fontSize: 12, fontWeight: 700, color: "#374151" }}>{r.sender}</span>
+                            <span style={{ fontSize: 11, color: "#9ca3af" }}>{r.created_at}</span>
+                          </div>
+                          <p style={{ margin: 0, fontSize: 13, color: "#374151", lineHeight: 1.6 }}>{r.body}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {replyingTo === m.id && (
+                    <div style={{ marginTop: 12, borderTop: "1px solid #e5e7eb", paddingTop: 12 }}>
+                      <textarea
+                        style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 8, padding: "10px 12px", fontSize: 13, resize: "vertical", minHeight: 80, boxSizing: "border-box" }}
+                        placeholder="Write your reply…"
+                        value={replyBody}
+                        onChange={(e) => setReplyBody(e.target.value)}
+                      />
+                      <div style={{ textAlign: "right", marginTop: 8 }}>
+                        <button style={styles.markReadBtn} disabled={replySending || !replyBody.trim()} onClick={() => handleReply(m.id)}>
+                          {replySending ? "Sending…" : "Send Reply"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -544,6 +597,7 @@ const styles = {
   apptDateMon: { fontSize: 12, fontWeight: 600, color: "#6b7280", marginTop: 2 },
 
   msgCard:     { background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: "18px 20px", boxShadow: "0 1px 3px rgba(0,0,0,0.06)" },
+  replyBtn:    { padding: "5px 12px", fontSize: 12, fontWeight: 600, border: "1px solid #d1d5db", borderRadius: 6, background: "#f9fafb", cursor: "pointer", color: "#374151" },
   unreadBadge: { fontSize: 11, fontWeight: 700, background: "#1a56db", color: "#fff", padding: "2px 8px", borderRadius: 20 },
   markReadBtn: { padding: "5px 14px", border: "1px solid #bfdbfe", borderRadius: 7, background: "#eff6ff", color: "#1a56db", fontSize: 12, fontWeight: 600, cursor: "pointer" },
   downloadBtn: { padding: "9px 16px", border: "1px solid rgba(255,255,255,0.5)", borderRadius: 8, background: "rgba(255,255,255,0.15)", color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" },

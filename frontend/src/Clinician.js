@@ -871,6 +871,19 @@ export default function Clinician() {
                             </div>
                             <p style={{ margin: "6px 0 0", fontSize: 13, color: "#4b5563", lineHeight: 1.6 }}>{m.body}</p>
                             <div style={{ marginTop: 6, fontSize: 11, color: "#9ca3af" }}>From: {m.sender}</div>
+                            {m.replies && m.replies.length > 0 && (
+                              <div style={{ marginTop: 10, borderTop: "1px solid #f3f4f6", paddingTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+                                {m.replies.map((r) => (
+                                  <div key={r.id} style={{ paddingLeft: 12, borderLeft: "3px solid #6b7280", background: "#f9fafb", borderRadius: 6, padding: "8px 12px" }}>
+                                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                                      <span style={{ fontSize: 12, fontWeight: 700, color: "#374151" }}>{r.sender} <span style={{ fontWeight: 400, color: "#9ca3af" }}>(patient reply)</span></span>
+                                      <span style={{ fontSize: 11, color: "#9ca3af" }}>{r.created_at}</span>
+                                    </div>
+                                    <p style={{ margin: 0, fontSize: 13, color: "#374151", lineHeight: 1.6 }}>{r.body}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
                           </div>
                         ))}
                       </div>

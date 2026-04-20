@@ -330,7 +330,7 @@ def update_appointment(appt_id):
 def get_messages_for_patient(patient_id):
     msgs = (
         Message.query
-        .filter_by(patient_id=patient_id)
+        .filter_by(patient_id=patient_id, parent_id=None)
         .order_by(Message.created_at.desc())
         .all()
     )
@@ -346,7 +346,7 @@ def get_my_messages():
     patient_id = user.patient_id
     msgs = (
         Message.query
-        .filter_by(patient_id=patient_id)
+        .filter_by(patient_id=patient_id, parent_id=None)
         .order_by(Message.created_at.desc())
         .all()
     )
@@ -381,6 +381,41 @@ def mark_message_read(msg_id):
     msg.is_read = True
     db.session.commit()
     return jsonify(msg.to_dict()), 200
+
+@app.post("/messages/<int:msg_id>/reply")
+@jwt_required()
+def reply_to_message(msg_id):
+    claims = get_jwt()
+    role   = claims.get("role")
+    if role not in ["patient", "clinician", "admin"]:
+        return jsonify({"msg": "Forbidden"}), 403
+
+    parent = db.session.get(Message, msg_id)
+    if not parent:
+        return jsonify({"msg": "Not found"}), 404
+
+    if role == "patient":
+        email = get_jwt_identity()
+        user  = User.query.filter_by(email=email).first()
+        if not user or user.patient_id != parent.patient_id:
+            return jsonify({"msg": "Forbidden"}), 403
+        sender = user.name or "Patient"
+    else:
+        sender = claims.get("name", "Care Team")
+
+    data  = request.get_json() or {}
+    reply = Message(
+        patient_id = parent.patient_id,
+        sender     = sender,
+        subject    = f"Re: {parent.subject}",
+        body       = data.get("body", ""),
+        created_at = datetime.now().strftime("%Y-%m-%d %H:%M"),
+        is_read    = False,
+        parent_id  = parent.id,
+    )
+    db.session.add(reply)
+    db.session.commit()
+    return jsonify(parent.to_dict()), 201
 
 @app.post("/admissions/<int:adm_id>/notes")
 @jwt_required()

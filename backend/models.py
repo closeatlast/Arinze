@@ -281,11 +281,15 @@ class Message(db.Model):
     body       = db.Column(db.Text)
     created_at = db.Column(db.String(30))
     is_read    = db.Column(db.Boolean, default=False)
+    parent_id  = db.Column(db.Integer, db.ForeignKey("messages.id"), nullable=True)
 
-    patient = db.relationship("Patient", back_populates="messages")
+    patient  = db.relationship("Patient", back_populates="messages")
+    replies  = db.relationship("Message", backref=db.backref("parent", remote_side="Message.id"),
+                               foreign_keys="Message.parent_id", order_by="Message.created_at",
+                               lazy="dynamic")
 
-    def to_dict(self):
-        return {
+    def to_dict(self, include_replies=True):
+        d = {
             "id":         self.id,
             "patient_id": self.patient_id,
             "sender":     self.sender,
@@ -293,7 +297,11 @@ class Message(db.Model):
             "body":       self.body,
             "created_at": self.created_at,
             "is_read":    self.is_read,
+            "parent_id":  self.parent_id,
         }
+        if include_replies:
+            d["replies"] = [r.to_dict(include_replies=False) for r in self.replies]
+        return d
 
 
 class User(db.Model):
