@@ -57,7 +57,6 @@ export default function Patient() {
 
   const [appointments,  setAppointments]  = useState([]);
   const [apptLoading,   setApptLoading]   = useState(false);
-  const [expandedAppt,  setExpandedAppt]  = useState(null);
 
   const [messages,      setMessages]      = useState([]);
   const [msgLoading,    setMsgLoading]    = useState(false);
@@ -463,14 +462,12 @@ export default function Patient() {
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               {appointments.map((a) => {
-                const isOpen = expandedAppt === a.id;
                 const apptDate = new Date(a.appt_date + "T00:00:00");
-                const dayNum = a.appt_date?.split("-")[2];
+                const dayNum   = a.appt_date?.split("-")[2];
                 const monthStr = apptDate.toLocaleString("default", { month: "short" });
                 const fullDate = apptDate.toLocaleString("default", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
                 return (
-                  <div key={a.id} style={{ ...styles.apptCard, cursor: "pointer", transition: "box-shadow 0.15s" }}
-                    onClick={() => setExpandedAppt(isOpen ? null : a.id)}>
+                  <div key={a.id} style={styles.apptCard}>
                     <div style={styles.apptDateBox}>
                       <span style={styles.apptDateDay}>{dayNum}</span>
                       <span style={styles.apptDateMon}>{monthStr}</span>
@@ -481,57 +478,41 @@ export default function Patient() {
                           <span style={{ fontWeight: 700, fontSize: 15, color: "#111827" }}>{a.appt_type}</span>
                           <ApptPill status={a.status} />
                         </div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }} onClick={(e) => e.stopPropagation()}>
-                          {a.status === "Scheduled" && (
-                            <button style={styles.cancelApptBtn} onClick={() => handleCancelAppt(a.id)}>
-                              Cancel
-                            </button>
-                          )}
-                          <span style={{ fontSize: 12, color: "#9ca3af" }}>{isOpen ? "▲" : "▼"}</span>
-                        </div>
-                      </div>
-                      <div style={{ fontSize: 13, color: "#6b7280", marginTop: 4 }}>
-                        {a.appt_time} &nbsp;·&nbsp; {a.clinician}
+                        {a.status === "Scheduled" && (
+                          <button style={styles.cancelApptBtn} onClick={() => handleCancelAppt(a.id)}>
+                            Cancel
+                          </button>
+                        )}
                       </div>
 
-                      {isOpen && (
-                        <div style={styles.apptSummary} onClick={(e) => e.stopPropagation()}>
-                          <div style={styles.apptSummaryGrid}>
-                            <div style={styles.apptSummaryItem}>
-                              <span style={styles.apptSummaryLabel}>Date</span>
-                              <span style={styles.apptSummaryValue}>{fullDate}</span>
-                            </div>
-                            <div style={styles.apptSummaryItem}>
-                              <span style={styles.apptSummaryLabel}>Time</span>
-                              <span style={styles.apptSummaryValue}>{a.appt_time}</span>
-                            </div>
-                            <div style={styles.apptSummaryItem}>
-                              <span style={styles.apptSummaryLabel}>Type</span>
-                              <span style={styles.apptSummaryValue}>{a.appt_type}</span>
-                            </div>
-                            <div style={styles.apptSummaryItem}>
-                              <span style={styles.apptSummaryLabel}>Provider</span>
-                              <span style={styles.apptSummaryValue}>{a.clinician}</span>
-                            </div>
-                            <div style={styles.apptSummaryItem}>
-                              <span style={styles.apptSummaryLabel}>Status</span>
-                              <span style={styles.apptSummaryValue}><ApptPill status={a.status} /></span>
-                            </div>
+                      <div style={styles.apptSummary}>
+                        <div style={styles.apptSummaryGrid}>
+                          <div style={styles.apptSummaryItem}>
+                            <span style={styles.apptSummaryLabel}>Date</span>
+                            <span style={styles.apptSummaryValue}>{fullDate}</span>
                           </div>
-                          {a.notes ? (
-                            <div style={styles.apptNoteBox}>
-                              <span style={styles.apptNoteLabel}>
-                                {a.status === "Completed" ? "Visit Summary" : "Appointment Notes"}
-                              </span>
-                              <p style={styles.apptNoteText}>{a.notes}</p>
-                            </div>
-                          ) : (
-                            <p style={{ fontSize: 13, color: "#9ca3af", marginTop: 12 }}>
-                              {a.status === "Completed" ? "No visit summary on file." : "No additional notes."}
-                            </p>
-                          )}
+                          <div style={styles.apptSummaryItem}>
+                            <span style={styles.apptSummaryLabel}>Time</span>
+                            <span style={styles.apptSummaryValue}>{a.appt_time}</span>
+                          </div>
+                          <div style={styles.apptSummaryItem}>
+                            <span style={styles.apptSummaryLabel}>Provider</span>
+                            <span style={styles.apptSummaryValue}>{a.clinician}</span>
+                          </div>
+                          <div style={styles.apptSummaryItem}>
+                            <span style={styles.apptSummaryLabel}>Visit Type</span>
+                            <span style={styles.apptSummaryValue}>{a.appt_type}</span>
+                          </div>
                         </div>
-                      )}
+                        {a.notes && (
+                          <div style={styles.apptNoteBox}>
+                            <span style={styles.apptNoteLabel}>
+                              {a.status === "Completed" ? "Visit Summary" : "Appointment Notes"}
+                            </span>
+                            <p style={styles.apptNoteText}>{a.notes}</p>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
                 );
