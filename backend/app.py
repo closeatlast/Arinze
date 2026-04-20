@@ -325,6 +325,25 @@ def update_appointment(appt_id):
     db.session.commit()
     return jsonify(appt.to_dict()), 200
 
+@app.patch("/appointments/<int:appt_id>/cancel")
+@jwt_required()
+def cancel_appointment(appt_id):
+    claims = get_jwt()
+    if claims.get("role") != "patient":
+        return jsonify({"msg": "Forbidden"}), 403
+    email = get_jwt_identity()
+    user  = User.query.filter_by(email=email).first()
+    appt  = db.session.get(Appointment, appt_id)
+    if not appt:
+        return jsonify({"msg": "Not found"}), 404
+    if not user or appt.patient_id != user.patient_id:
+        return jsonify({"msg": "Forbidden"}), 403
+    if appt.status != "Scheduled":
+        return jsonify({"msg": "Only scheduled appointments can be cancelled"}), 400
+    appt.status = "Cancelled"
+    db.session.commit()
+    return jsonify(appt.to_dict()), 200
+
 @app.get("/messages/patient/<int:patient_id>")
 @jwt_required()
 def get_messages_for_patient(patient_id):

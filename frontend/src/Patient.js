@@ -134,6 +134,24 @@ export default function Patient() {
     } catch {}
   };
 
+  const handleCancelAppt = async (apptId) => {
+    try {
+      const res = await fetch(`http://127.0.0.1:5001/appointments/${apptId}/cancel`, {
+        method: "PATCH",
+        headers,
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setAppointments((prev) => prev.map((a) => (a.id === apptId ? updated : a)));
+        setNotifications((prev) => ({
+          ...prev,
+          upcoming_appointments: Math.max(0, prev.upcoming_appointments - 1),
+          total: Math.max(0, prev.total - 1),
+        }));
+      }
+    } catch {}
+  };
+
   const handleReply = async (msgId) => {
     if (!replyBody.trim()) return;
     setReplySending(true);
@@ -452,9 +470,19 @@ export default function Patient() {
                     </span>
                   </div>
                   <div style={{ flex: 1 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                      <span style={{ fontWeight: 700, fontSize: 15, color: "#111827" }}>{a.appt_type}</span>
-                      <ApptPill status={a.status} />
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                        <span style={{ fontWeight: 700, fontSize: 15, color: "#111827" }}>{a.appt_type}</span>
+                        <ApptPill status={a.status} />
+                      </div>
+                      {a.status === "Scheduled" && (
+                        <button
+                          style={styles.cancelApptBtn}
+                          onClick={() => handleCancelAppt(a.id)}
+                        >
+                          Cancel
+                        </button>
+                      )}
                     </div>
                     <div style={{ fontSize: 13, color: "#6b7280", marginTop: 4 }}>
                       {a.appt_time} &nbsp;·&nbsp; {a.clinician}
@@ -597,7 +625,8 @@ const styles = {
   apptDateMon: { fontSize: 12, fontWeight: 600, color: "#6b7280", marginTop: 2 },
 
   msgCard:     { background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: "18px 20px", boxShadow: "0 1px 3px rgba(0,0,0,0.06)" },
-  replyBtn:    { padding: "5px 12px", fontSize: 12, fontWeight: 600, border: "1px solid #d1d5db", borderRadius: 6, background: "#f9fafb", cursor: "pointer", color: "#374151" },
+  replyBtn:        { padding: "5px 12px", fontSize: 12, fontWeight: 600, border: "1px solid #d1d5db", borderRadius: 6, background: "#f9fafb", cursor: "pointer", color: "#374151" },
+  cancelApptBtn:   { padding: "5px 14px", fontSize: 12, fontWeight: 600, border: "1px solid #fca5a5", borderRadius: 6, background: "#fff1f2", cursor: "pointer", color: "#b91c1c" },
   unreadBadge: { fontSize: 11, fontWeight: 700, background: "#1a56db", color: "#fff", padding: "2px 8px", borderRadius: 20 },
   markReadBtn: { padding: "5px 14px", border: "1px solid #bfdbfe", borderRadius: 7, background: "#eff6ff", color: "#1a56db", fontSize: 12, fontWeight: 600, cursor: "pointer" },
   downloadBtn: { padding: "9px 16px", border: "1px solid rgba(255,255,255,0.5)", borderRadius: 8, background: "rgba(255,255,255,0.15)", color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" },
