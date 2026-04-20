@@ -467,7 +467,6 @@ export default function Patient() {
                 const apptDate = new Date(a.appt_date + "T00:00:00");
                 const dayNum = a.appt_date?.split("-")[2];
                 const monthStr = apptDate.toLocaleString("default", { month: "short" });
-                const yearStr = apptDate.getFullYear();
                 const fullDate = apptDate.toLocaleString("default", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
                 return (
                   <div key={a.id} style={{ ...styles.apptCard, cursor: "pointer", transition: "box-shadow 0.15s" }}
