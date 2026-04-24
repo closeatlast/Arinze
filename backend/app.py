@@ -371,22 +371,45 @@ def get_my_messages():
     )
     return jsonify([m.to_dict() for m in msgs]), 200
 
+@app.get("/clinicians/list")
+@jwt_required()
+def list_clinicians():
+    users = User.query.filter_by(role="clinician").order_by(User.name).all()
+    return jsonify([{"name": u.name, "department": u.department} for u in users]), 200
+
 @app.post("/messages")
 @jwt_required()
 def send_message():
-    role = get_jwt().get("role")
-    if role not in ["clinician", "admin"]:
+    claims = get_jwt()
+    role   = claims.get("role")
+    data   = request.get_json() or {}
+    now    = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    if role == "patient":
+        email = get_jwt_identity()
+        user  = User.query.filter_by(email=email).first()
+        if not user or not user.patient_id:
+            return jsonify({"msg": "Forbidden"}), 403
+        msg = Message(
+            patient_id = user.patient_id,
+            sender     = user.name or "Patient",
+            subject    = data.get("subject", "(No subject)"),
+            body       = data.get("body", ""),
+            created_at = now,
+            is_read    = False,
+        )
+    elif role in ["clinician", "admin"]:
+        msg = Message(
+            patient_id = data.get("patient_id"),
+            sender     = data.get("sender", "Clinician"),
+            subject    = data.get("subject", "(No subject)"),
+            body       = data.get("body", ""),
+            created_at = now,
+            is_read    = False,
+        )
+    else:
         return jsonify({"msg": "Forbidden"}), 403
-    data = request.get_json() or {}
-    now  = datetime.now().strftime("%Y-%m-%d %H:%M")
-    msg  = Message(
-        patient_id = data.get("patient_id"),
-        sender     = data.get("sender", "Clinician"),
-        subject    = data.get("subject", "(No subject)"),
-        body       = data.get("body", ""),
-        created_at = now,
-        is_read    = False,
-    )
+
     db.session.add(msg)
     db.session.commit()
     return jsonify(msg.to_dict()), 201

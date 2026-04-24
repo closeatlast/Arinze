@@ -64,6 +64,11 @@ export default function Patient() {
   const [replyBody,     setReplyBody]     = useState("");
   const [replySending,  setReplySending]  = useState(false);
 
+  const [composing,     setComposing]     = useState(false);
+  const [clinicians,    setClinicians]    = useState([]);
+  const [composeForm,   setComposeForm]   = useState({ to: "", subject: "", body: "" });
+  const [composeSending, setComposeSending] = useState(false);
+
   const [notifications, setNotifications] = useState({ total: 0, unread_messages: 0, upcoming_appointments: 0 });
 
   const headers = { Authorization: `Bearer ${token}` };
@@ -109,10 +114,18 @@ export default function Patient() {
       } catch {}
     };
 
+    const fetchClinicians = async () => {
+      try {
+        const res = await fetch("http://127.0.0.1:5001/clinicians/list", { headers });
+        if (res.ok) setClinicians(await res.json());
+      } catch {}
+    };
+
     fetchMe();
     fetchAppts();
     fetchMsgs();
     fetchNotifs();
+    fetchClinicians();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -169,6 +182,29 @@ export default function Patient() {
       }
     } catch {}
     setReplySending(false);
+  };
+
+  const handleCompose = async (e) => {
+    e.preventDefault();
+    if (!composeForm.subject.trim() || !composeForm.body.trim()) return;
+    setComposeSending(true);
+    try {
+      const subject = composeForm.to
+        ? `To ${composeForm.to}: ${composeForm.subject}`
+        : composeForm.subject;
+      const res = await fetch("http://127.0.0.1:5001/messages", {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify({ subject, body: composeForm.body }),
+      });
+      if (res.ok) {
+        const newMsg = await res.json();
+        setMessages((prev) => [newMsg, ...prev]);
+        setComposing(false);
+        setComposeForm({ to: "", subject: "", body: "" });
+      }
+    } catch {}
+    setComposeSending(false);
   };
 
   const handleLogout = () => { localStorage.removeItem("token"); localStorage.removeItem("role"); navigate("/"); };
@@ -524,7 +560,51 @@ export default function Patient() {
 
       {activeTab === "messages" && (
         <div style={styles.tabContent}>
-          <h3 style={styles.tabContentTitle}>My Messages</h3>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+            <h3 style={{ ...styles.tabContentTitle, margin: 0 }}>My Messages</h3>
+            <button style={styles.composeBtn} onClick={() => { setComposing((v) => !v); setComposeForm({ to: "", subject: "", body: "" }); }}>
+              {composing ? "Cancel" : "+ New Message"}
+            </button>
+          </div>
+
+          {composing && (
+            <form onSubmit={handleCompose} style={styles.composeBox}>
+              <p style={{ margin: "0 0 14px", fontWeight: 700, fontSize: 15, color: "#111827" }}>New Message</p>
+              <label style={styles.label}>To (Doctor)</label>
+              <select
+                style={styles.input}
+                value={composeForm.to}
+                onChange={(e) => setComposeForm((p) => ({ ...p, to: e.target.value }))}
+              >
+                <option value="">Select a doctor…</option>
+                {clinicians.map((c) => (
+                  <option key={c.name} value={c.name}>{c.name}{c.department ? ` — ${c.department}` : ""}</option>
+                ))}
+              </select>
+              <label style={styles.label}>Subject</label>
+              <input
+                style={styles.input}
+                placeholder="Subject"
+                value={composeForm.subject}
+                onChange={(e) => setComposeForm((p) => ({ ...p, subject: e.target.value }))}
+                required
+              />
+              <label style={styles.label}>Message</label>
+              <textarea
+                style={{ ...styles.input, minHeight: 100, resize: "vertical" }}
+                placeholder="Write your message…"
+                value={composeForm.body}
+                onChange={(e) => setComposeForm((p) => ({ ...p, body: e.target.value }))}
+                required
+              />
+              <div style={{ textAlign: "right", marginTop: 4 }}>
+                <button type="submit" style={styles.composeSubmitBtn} disabled={composeSending}>
+                  {composeSending ? "Sending…" : "Send Message"}
+                </button>
+              </div>
+            </form>
+          )}
+
           {msgLoading ? (
             <p style={styles.empty}>Loading messages…</p>
           ) : messages.length === 0 ? (
@@ -663,4 +743,10 @@ const styles = {
   unreadBadge: { fontSize: 11, fontWeight: 700, background: "#1a56db", color: "#fff", padding: "2px 8px", borderRadius: 20 },
   markReadBtn: { padding: "5px 14px", border: "1px solid #bfdbfe", borderRadius: 7, background: "#eff6ff", color: "#1a56db", fontSize: 12, fontWeight: 600, cursor: "pointer" },
   downloadBtn: { padding: "9px 16px", border: "1px solid rgba(255,255,255,0.5)", borderRadius: 8, background: "rgba(255,255,255,0.15)", color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" },
+
+  composeBtn:       { padding: "8px 16px", background: "#1a56db", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" },
+  composeBox:       { background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: "20px 22px", marginBottom: 20, boxShadow: "0 1px 4px rgba(0,0,0,0.07)" },
+  composeSubmitBtn: { padding: "8px 20px", background: "#1a56db", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" },
+  label:            { display: "block", fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4, marginTop: 10 },
+  input:            { width: "100%", border: "1px solid #d1d5db", borderRadius: 8, padding: "9px 12px", fontSize: 13, boxSizing: "border-box", color: "#111827" },
 };
