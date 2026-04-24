@@ -396,7 +396,7 @@ def send_message():
             subject    = data.get("subject", "(No subject)"),
             body       = data.get("body", ""),
             created_at = now,
-            is_read    = False,
+            is_read    = True,
         )
     elif role in ["clinician", "admin"]:
         msg = Message(
